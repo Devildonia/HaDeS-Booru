@@ -85,6 +85,25 @@ python -m pytest
 python -m ruff check .
 ```
 
+## Release Notes — v1.0.0
+
+**Bug fixes over development builds**
+
+- API credentials are bound to the exact board they were entered for: mirrors (e.g. `safebooru.donmai.us`) no longer inherit `danbooru.donmai.us` credentials.
+- Saving the credentials form no longer wipes boards whose fields were left empty.
+- Partial search results (e.g. a failure on page 2 of 3) are kept and clearly flagged in the status bar instead of failing silently.
+- ZIP trainer export writes an `errors.txt` manifest when individual image downloads fail, sanitizes entry names to a safe character set, and reports failures in the status bar.
+- Export destination falls back to `./exports` when the requested folder is not accessible by the web server.
+- The HTTP engine reuses a single connection pool per request sequence and honors the server's `Retry-After` header on HTTP 429.
+- Kaomoji detection now accepts pipe characters (`(|_|)`, `(o|_o)`); Art Platform metadata is HTML-unescaped and URL-resolved; "open folder in explorer" works on Windows, Linux and macOS.
+- Moebooru posts rated `g` are no longer mis-mapped to "unrated".
+- `gradio` is pinned to the `6.x` major line.
+
+**Known limitations**
+
+- The rating filter is applied client-side after results are fetched; it is not yet sent to the server as a query parameter (e.g. `rating:g`) where the API supports it.
+- Dependencies use range pins in `requirements.txt` rather than a generated lockfile, and CI does not run a vulnerability audit (`pip-audit`) yet.
+
 ## License
 
 Distributed under the [MIT License](LICENSE).
