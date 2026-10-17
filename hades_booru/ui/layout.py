@@ -647,6 +647,7 @@ def create_gradio_app() -> gr.Blocks:
                             tags=effective_tags,
                             limit=int(limit_val),
                             progress_cb=lambda p, msg: progress(p, desc=msg),
+                            rating=rating_val if rating_val and rating_val != "all" else None,
                         )
                         status_note = t(
                             cur_lang,
@@ -666,6 +667,7 @@ def create_gradio_app() -> gr.Blocks:
                         tags=effective_tags,
                         limit=int(limit_val),
                         progress_cb=lambda p, msg: progress(p, desc=msg),
+                        rating=rating_val if rating_val and rating_val != "all" else None,
                     )
                     status_note = t(
                         cur_lang,
@@ -679,6 +681,8 @@ def create_gradio_app() -> gr.Blocks:
                         )
                         status_state = "warn"
 
+                # Safety net: adapters without server-side rating support (or unmapped
+                # ratings like "u") are still filtered client-side.
                 if rating_val and rating_val != "all":
                     results = [p for p in results if p.rating == rating_val]
                     status_note += t(

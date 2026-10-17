@@ -219,6 +219,7 @@ class GelbooruAdapter(BooruAdapter):
         tags: str,
         limit: int = 20,
         progress_cb: ProgressCallback | None = None,
+        rating: str | None = None,
     ) -> list[Post]:
         target_count = max(1, min(limit, 500))
         page_size = min(100, target_count)
@@ -248,6 +249,11 @@ class GelbooruAdapter(BooruAdapter):
             }
             if clean_tags:
                 params["tags"] = clean_tags
+            # DAPI exposes rating as a tag; "g" and "u" have no DAPI equivalent and
+            # fall back to the UI client-side filter.
+            dapi_rating_tag = {"s": "rating:s", "q": "rating:q", "e": "rating:e"}.get(rating or "")
+            if dapi_rating_tag:
+                params["tags"] = f"{params.get('tags', '')} {dapi_rating_tag}".strip()
             self._apply_credentials(params)
 
             try:

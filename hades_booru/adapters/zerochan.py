@@ -115,6 +115,7 @@ class ZerochanAdapter(BooruAdapter):
         tags: str,
         limit: int = 20,
         progress_cb: ProgressCallback | None = None,
+        rating: str | None = None,  # Zerochan has no rating query param; UI filters client-side.
     ) -> list[Post]:
         target_count = max(1, min(limit, 200))
         page_size = min(50, target_count)

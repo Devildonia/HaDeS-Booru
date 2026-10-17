@@ -19,6 +19,15 @@ from hades_booru.models import CategorizedTags, Post, Rating
 
 POST_ID_RE = re.compile(r"/posts/(\d+)", re.IGNORECASE)
 
+# Danbooru v2 exposes rating as a tag (e.g. `rating:safe`). "u" (unrated) has no
+# server-side equivalent and falls back to the UI client-side filter.
+SERVER_RATING_TAGS: dict[str, str] = {
+    "g": "rating:safe",
+    "s": "rating:sensitive",
+    "q": "rating:questionable",
+    "e": "rating:explicit",
+}
+
 
 def _normalize_rating(raw: str | None) -> Rating:
     if not raw:
@@ -148,12 +157,16 @@ class DanbooruAdapter(BooruAdapter):
         tags: str,
         limit: int = 20,
         progress_cb: ProgressCallback | None = None,
+        rating: str | None = None,
     ) -> list[Post]:
         target_count = max(1, min(limit, 500))
         page_size = min(200, target_count)
         total_pages = math.ceil(target_count / page_size)
 
         clean_tags = " ".join(tags.strip().split())
+        rating_tag = SERVER_RATING_TAGS.get(rating or "")
+        if rating_tag:
+            clean_tags = f"{clean_tags} {rating_tag}".strip()
         posts: list[Post] = []
         seen_ids: set[str] = set()
         auth = self._get_auth()

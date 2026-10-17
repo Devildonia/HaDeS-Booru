@@ -109,6 +109,7 @@ class PhilomenaAdapter(BooruAdapter):
         tags: str,
         limit: int = 20,
         progress_cb: ProgressCallback | None = None,
+        rating: str | None = None,  # Philomena has no stable rating query param; UI filters client-side.
     ) -> list[Post]:
         target_count = max(1, min(limit, 500))
         page_size = min(50, target_count)

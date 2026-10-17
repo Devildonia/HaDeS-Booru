@@ -48,6 +48,7 @@ class ArtPlatformsAdapter(BooruAdapter):
         tags: str,
         limit: int = 20,
         progress_cb: ProgressCallback | None = None,
+        rating: str | None = None,  # Art platforms have no rating query param; UI filters client-side.
     ) -> list[Post]:
         if self.id in ("generic", "ehentai"):
             raise BooruNetworkError(

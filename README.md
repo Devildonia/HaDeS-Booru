@@ -1,4 +1,4 @@
-# HaDeS Booru v1.0.0
+# HaDeS Booru v1.0.1
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -41,7 +41,8 @@ HaDeS-Booru/
 ├── app.py                        # Entry point (http://127.0.0.1:7860)
 ├── start.bat                     # Windows launcher script
 ├── start.sh                      # Linux / macOS launcher script
-├── requirements.txt              # Runtime dependencies
+├── requirements.txt              # Runtime dependencies (range pins)
+├── requirements.lock             # Locked dependency tree (reproducible installs, pip-audit in CI)
 ├── requirements-dev.txt          # Dev dependencies (pytest, ruff)
 ├── pyproject.toml                # Project metadata, Ruff and Pytest configuration
 ├── LICENSE                       # MIT license
@@ -67,6 +68,12 @@ HaDeS-Booru/
 pip install -r requirements.txt
 ```
 
+For a fully reproducible install with the exact audited dependency tree:
+
+```powershell
+pip install -r requirements.lock
+```
+
 ### 2. Run the Application
 - **Windows**: double-click `start.bat`
 - **Linux / macOS**: `./start.sh`
@@ -85,6 +92,14 @@ python -m pytest
 python -m ruff check .
 ```
 
+## Release Notes — v1.0.1
+
+**New features**
+
+- **Server-side rating filter**: when you pick a rating (G/S/Q/E), the query is now sent to the source API where it is supported — Danbooru v2 boards (`rating:safe`/`sensitive`/`questionable`/`explicit` tags), Moebooru boards (`rating` parameter), E621/E926 (`rating[]` parameter), and DAPI boards (`rating:s|q|e` tags) — instead of downloading everything and filtering locally. Sources without server-side support keep the client-side safety filter, and "Unrated" (which no API can pre-filter) always falls back to it.
+- **Locked, auditable dependencies**: `requirements.lock` pins the full dependency tree for reproducible installs, and CI now runs `pip-audit` against it on every push.
+- Test suite grows to 39 tests.
+
 ## Release Notes — v1.0.0
 
 **Bug fixes over development builds**
@@ -98,11 +113,6 @@ python -m ruff check .
 - Kaomoji detection now accepts pipe characters (`(|_|)`, `(o|_o)`); Art Platform metadata is HTML-unescaped and URL-resolved; "open folder in explorer" works on Windows, Linux and macOS.
 - Moebooru posts rated `g` are no longer mis-mapped to "unrated".
 - `gradio` is pinned to the `6.x` major line.
-
-**Known limitations**
-
-- The rating filter is applied client-side after results are fetched; it is not yet sent to the server as a query parameter (e.g. `rating:g`) where the API supports it.
-- Dependencies use range pins in `requirements.txt` rather than a generated lockfile, and CI does not run a vulnerability audit (`pip-audit`) yet.
 
 ## License
 

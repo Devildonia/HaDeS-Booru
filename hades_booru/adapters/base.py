@@ -32,8 +32,14 @@ class BooruAdapter(ABC):
         tags: str,
         limit: int = 20,
         progress_cb: ProgressCallback | None = None,
+        rating: str | None = None,
     ) -> list[Post]:
-        """Executes a paginated tag search and returns normalized Post instances."""
+        """Executes a paginated tag search and returns normalized Post instances.
+
+        `rating` ("g"/"s"/"q"/"e"/"u") is applied server-side when the source API
+        supports it; adapters without server-side support ignore it and the UI keeps
+        its client-side safety filter.
+        """
 
     @abstractmethod
     def fetch_single_by_url(self, url: str) -> Post:

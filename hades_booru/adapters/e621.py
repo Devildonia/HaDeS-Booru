@@ -113,6 +113,7 @@ class E621Adapter(BooruAdapter):
         tags: str,
         limit: int = 20,
         progress_cb: ProgressCallback | None = None,
+        rating: str | None = None,
     ) -> list[Post]:
         target_count = max(1, min(limit, 500))
         page_size = min(100, target_count)
@@ -138,6 +139,9 @@ class E621Adapter(BooruAdapter):
             }
             if clean_tags:
                 params["tags"] = clean_tags
+            if rating in ("g", "s", "q", "e"):
+                # E621/E926 filter via the `rating[]` query parameter.
+                params["rating[]"] = rating
 
             try:
                 data = http_client.get_json(url, params=params, auth=auth)
