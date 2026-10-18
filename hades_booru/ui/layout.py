@@ -123,12 +123,19 @@ def open_folder_in_explorer(folder_path: str, lang: str = "en") -> str:
         if sys.platform == "win32":
             os.startfile(str(target))  # type: ignore[attr-defined]
         elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(target)], check=False)
+            subprocess.Popen(["open", str(target)])
         else:
-            subprocess.Popen(["xdg-open", str(target)], check=False)
+            subprocess.Popen(["xdg-open", str(target)])
         return t(lang, "explorer_opened", path=str(target))
     except Exception as err:
         return t(lang, "explorer_error", error=str(err), path=str(target))
+
+
+def _cred_placeholder(has_value: bool, lang: str, is_secret: bool = False) -> str | None:
+    """Returns a generic masked placeholder when a credential is saved, never exposing the value itself."""
+    if not has_value:
+        return None
+    return t(lang, "cred_key_saved_placeholder" if is_secret else "cred_user_saved_placeholder")
 
 
 def create_gradio_app() -> gr.Blocks:
@@ -425,9 +432,9 @@ def create_gradio_app() -> gr.Blocks:
                         )
                         creds_sub_md = gr.Markdown(t(lang, "creds_subheading"))
 
-                        # Saved credentials are intentionally NOT prefilled into the form fields
-                        # (they would end up in the page /config and be exposed with --share).
-                        # Saved values stay active in the session; placeholders show presence only.
+                        # Saved credentials are NEVER passed to value= or placeholder=
+                        # (both are serialized into Gradio's /config JSON). Only generic masked
+                        # indicators are shown when a credential is present.
                         danbooru_cred = config_manager.get_credentials("danbooru")
                         e621_cred = config_manager.get_credentials("e621")
                         gelbooru_cred = config_manager.get_credentials("gelbooru")
@@ -437,11 +444,13 @@ def create_gradio_app() -> gr.Blocks:
                             with gr.Group():
                                 gr.HTML('<div class="hades-cred-title">Danbooru (danbooru.donmai.us)</div>')
                                 danbooru_user = gr.Textbox(
-                                    placeholder=danbooru_cred.user_id or None,
+                                    placeholder=_cred_placeholder(bool(danbooru_cred.user_id), lang),
                                     label="Username",
                                 )
                                 danbooru_key = gr.Textbox(
-                                    placeholder=danbooru_cred.api_key or None,
+                                    placeholder=_cred_placeholder(
+                                        bool(danbooru_cred.api_key), lang, is_secret=True
+                                    ),
                                     label="API Key",
                                     type="password",
                                 )
@@ -449,11 +458,13 @@ def create_gradio_app() -> gr.Blocks:
                             with gr.Group():
                                 gr.HTML('<div class="hades-cred-title">E621 / E926 (e621.net)</div>')
                                 e621_user = gr.Textbox(
-                                    placeholder=e621_cred.user_id or None,
+                                    placeholder=_cred_placeholder(bool(e621_cred.user_id), lang),
                                     label="Username",
                                 )
                                 e621_key = gr.Textbox(
-                                    placeholder=e621_cred.api_key or None,
+                                    placeholder=_cred_placeholder(
+                                        bool(e621_cred.api_key), lang, is_secret=True
+                                    ),
                                     label="API Key",
                                     type="password",
                                 )
@@ -462,11 +473,13 @@ def create_gradio_app() -> gr.Blocks:
                             with gr.Group():
                                 gr.HTML('<div class="hades-cred-title">Gelbooru (gelbooru.com)</div>')
                                 gelbooru_user = gr.Textbox(
-                                    placeholder=gelbooru_cred.user_id or None,
+                                    placeholder=_cred_placeholder(bool(gelbooru_cred.user_id), lang),
                                     label="User ID",
                                 )
                                 gelbooru_key = gr.Textbox(
-                                    placeholder=gelbooru_cred.api_key or None,
+                                    placeholder=_cred_placeholder(
+                                        bool(gelbooru_cred.api_key), lang, is_secret=True
+                                    ),
                                     label="API Key",
                                     type="password",
                                 )
@@ -474,11 +487,13 @@ def create_gradio_app() -> gr.Blocks:
                             with gr.Group():
                                 gr.HTML('<div class="hades-cred-title">Rule34 (rule34.xxx)</div>')
                                 rule34_user = gr.Textbox(
-                                    placeholder=rule34_cred.user_id or None,
+                                    placeholder=_cred_placeholder(bool(rule34_cred.user_id), lang),
                                     label="User ID",
                                 )
                                 rule34_key = gr.Textbox(
-                                    placeholder=rule34_cred.api_key or None,
+                                    placeholder=_cred_placeholder(
+                                        bool(rule34_cred.api_key), lang, is_secret=True
+                                    ),
                                     label="API Key",
                                     type="password",
                                 )
@@ -487,7 +502,9 @@ def create_gradio_app() -> gr.Blocks:
                             value=cfg.persist_credentials,
                             label=t(lang, "persist_creds_label"),
                         )
-                        save_creds_btn = gr.Button(t(lang, "save_creds_btn"), variant="primary")
+                        with gr.Row():
+                            save_creds_btn = gr.Button(t(lang, "save_creds_btn"), variant="primary")
+                            clear_creds_btn = gr.Button(t(lang, "clear_creds_btn"), variant="secondary")
                         creds_status_md = gr.Markdown("")
 
         # =========================================================================
@@ -900,6 +917,7 @@ def create_gradio_app() -> gr.Blocks:
                 t(effective_lang, "creds_subheading"),
                 gr.update(label=t(effective_lang, "persist_creds_label")),
                 gr.update(value=t(effective_lang, "save_creds_btn")),
+                gr.update(value=t(effective_lang, "clear_creds_btn")),
             )
 
         def on_gallery_select(
@@ -979,6 +997,7 @@ def create_gradio_app() -> gr.Blocks:
             norm = build_normalizer_from_ui(replace_u, escape_p, filter_j, junk_str, sem_order, sep, persist=True)
             requested = Path(local_dir or "./exports").expanduser().resolve()
             cwd = Path.cwd().resolve()
+            used_cwd_fallback = False
             try:
                 requested.relative_to(cwd)
                 out_dir = requested
@@ -986,6 +1005,7 @@ def create_gradio_app() -> gr.Blocks:
                 # Gradio can only serve files inside the server working directory;
                 # fall back to a CWD-based folder instead of failing with InvalidPathError.
                 out_dir = cwd / "exports"
+                used_cwd_fallback = True
             file_path = bulk_exporter.create_export_file(
                 posts=posts,
                 mode=exp_mode,
@@ -1001,6 +1021,8 @@ def create_gradio_app() -> gr.Blocks:
                 progress_cb=lambda p, msg: progress(p, desc=msg),
             )
             status = t(cur_lang, "export_file_saved", path=str(file_path))
+            if used_cwd_fallback:
+                status += t(cur_lang, "export_file_cwd_fallback_suffix", requested=str(requested))
             if bulk_exporter.last_zip_errors:
                 status += t(
                     cur_lang, "export_zip_errors_suffix", count=len(bulk_exporter.last_zip_errors)
@@ -1047,6 +1069,22 @@ def create_gradio_app() -> gr.Blocks:
                 msg += t(cur_lang, "export_folder_failed_suffix", failed=summary["failed_img"])
             return msg
 
+        def _cred_textbox_updates(cur_lang: str) -> tuple[Any, ...]:
+            d_c = config_manager.get_credentials("danbooru")
+            e_c = config_manager.get_credentials("e621")
+            g_c = config_manager.get_credentials("gelbooru")
+            r_c = config_manager.get_credentials("rule34")
+            return (
+                gr.update(value="", placeholder=_cred_placeholder(bool(d_c.user_id), cur_lang)),
+                gr.update(value="", placeholder=_cred_placeholder(bool(d_c.api_key), cur_lang, is_secret=True)),
+                gr.update(value="", placeholder=_cred_placeholder(bool(e_c.user_id), cur_lang)),
+                gr.update(value="", placeholder=_cred_placeholder(bool(e_c.api_key), cur_lang, is_secret=True)),
+                gr.update(value="", placeholder=_cred_placeholder(bool(g_c.user_id), cur_lang)),
+                gr.update(value="", placeholder=_cred_placeholder(bool(g_c.api_key), cur_lang, is_secret=True)),
+                gr.update(value="", placeholder=_cred_placeholder(bool(r_c.user_id), cur_lang)),
+                gr.update(value="", placeholder=_cred_placeholder(bool(r_c.api_key), cur_lang, is_secret=True)),
+            )
+
         def save_credentials_handler(
             cur_lang: str,
             persist_flag: bool,
@@ -1058,7 +1096,7 @@ def create_gradio_app() -> gr.Blocks:
             g_key: str,
             r_user: str,
             r_key: str,
-        ) -> str:
+        ) -> tuple[Any, ...]:
             config_manager.set_credentials_many(
                 {
                     "danbooru": (d_user, d_key),
@@ -1068,9 +1106,12 @@ def create_gradio_app() -> gr.Blocks:
                 },
                 persist_to_disk=persist_flag,
             )
-            if persist_flag:
-                return t(cur_lang, "creds_saved_msg")
-            return t(cur_lang, "creds_saved_session_msg")
+            msg = t(cur_lang, "creds_saved_msg") if persist_flag else t(cur_lang, "creds_saved_session_msg")
+            return (msg, *_cred_textbox_updates(cur_lang))
+
+        def clear_credentials_handler(cur_lang: str) -> tuple[Any, ...]:
+            config_manager.clear_credentials()
+            return (t(cur_lang, "creds_cleared_msg"), *_cred_textbox_updates(cur_lang))
 
         # Wire search events
         search_outputs = [
@@ -1194,6 +1235,7 @@ def create_gradio_app() -> gr.Blocks:
                 creds_sub_md,
                 persist_creds_chk,
                 save_creds_btn,
+                clear_creds_btn,
             ],
         )
 
@@ -1330,21 +1372,31 @@ def create_gradio_app() -> gr.Blocks:
             outputs=[local_export_status],
         )
 
+        cred_textbox_list = [
+            danbooru_user,
+            danbooru_key,
+            e621_user,
+            e621_key,
+            gelbooru_user,
+            gelbooru_key,
+            rule34_user,
+            rule34_key,
+        ]
+
         save_creds_btn.click(
             fn=save_credentials_handler,
             inputs=[
                 lang_dropdown,
                 persist_creds_chk,
-                danbooru_user,
-                danbooru_key,
-                e621_user,
-                e621_key,
-                gelbooru_user,
-                gelbooru_key,
-                rule34_user,
-                rule34_key,
+                *cred_textbox_list,
             ],
-            outputs=[creds_status_md],
+            outputs=[creds_status_md, *cred_textbox_list],
+        )
+
+        clear_creds_btn.click(
+            fn=clear_credentials_handler,
+            inputs=[lang_dropdown],
+            outputs=[creds_status_md, *cred_textbox_list],
         )
 
     return app

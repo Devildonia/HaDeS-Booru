@@ -16,15 +16,24 @@ from hades_booru.config import config_manager
 from hades_booru.http_client import BooruNetworkError, http_client
 from hades_booru.models import CategorizedTags, Post, Rating
 
+# E621/E926 filter ratings via `rating:s`, `rating:q`, `rating:e` metatags inside `tags`.
+SERVER_RATING_TAGS: dict[str, str] = {
+    "g": "rating:s",
+    "s": "rating:s",
+    "q": "rating:q",
+    "e": "rating:e",
+}
 
-def _normalize_rating(raw: str | None) -> Rating:
+
+def _normalize_rating(raw: str | None, adapter_id: str = "e621") -> Rating:
     if not raw:
         return "u"
     lower = raw.lower()
     if lower in ("g", "general"):
         return "g"
     if lower in ("s", "safe", "sensitive"):
-        return "s"
+        # E926 is strictly SFW ("s" means Safe/General there), whereas on E621 "s" maps to "s".
+        return "g" if adapter_id == "e926" else "s"
     if lower in ("q", "questionable"):
         return "q"
     if lower in ("e", "explicit"):
@@ -95,7 +104,7 @@ class E621Adapter(BooruAdapter):
             file_url=file_url or sample_url,
             width=int(file_obj.get("width") or 0),
             height=int(file_obj.get("height") or 0),
-            rating=_normalize_rating(raw.get("rating")),
+            rating=_normalize_rating(raw.get("rating"), self.id),
             tags=CategorizedTags(
                 copyright=copyright_tags,
                 character=character_tags,
@@ -119,6 +128,9 @@ class E621Adapter(BooruAdapter):
         page_size = min(100, target_count)
         total_pages = math.ceil(target_count / page_size)
         clean_tags = " ".join(tags.strip().split())
+        rating_tag = SERVER_RATING_TAGS.get(rating or "")
+        if rating_tag:
+            clean_tags = f"{clean_tags} {rating_tag}".strip()
 
         posts: list[Post] = []
         seen_ids: set[str] = set()
@@ -139,9 +151,6 @@ class E621Adapter(BooruAdapter):
             }
             if clean_tags:
                 params["tags"] = clean_tags
-            if rating in ("g", "s", "q", "e"):
-                # E621/E926 filter via the `rating[]` query parameter.
-                params["rating[]"] = rating
 
             try:
                 data = http_client.get_json(url, params=params, auth=auth)

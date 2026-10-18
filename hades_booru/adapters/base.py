@@ -4,12 +4,15 @@ Abstract Base Class for all Booru and Art Platform Adapters.
 
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 from hades_booru.models import Post
 
 ProgressCallback = Callable[[float, str], None]
+
+_ADAPTER_TLS = threading.local()
 
 
 class BooruAdapter(ABC):
@@ -19,8 +22,17 @@ class BooruAdapter(ABC):
     name: str
     default_domain: str
 
-    # Populated by search() implementations when pagination stops early with partial results.
-    last_warning: str | None = None
+    @property
+    def last_warning(self) -> str | None:
+        """Thread-local warning populated when pagination stops early with partial results (N3)."""
+        warnings_map: dict[int, str | None] = getattr(_ADAPTER_TLS, "warnings", {})
+        return warnings_map.get(id(self))
+
+    @last_warning.setter
+    def last_warning(self, value: str | None) -> None:
+        if not hasattr(_ADAPTER_TLS, "warnings"):
+            _ADAPTER_TLS.warnings = {}
+        _ADAPTER_TLS.warnings[id(self)] = value
 
     @abstractmethod
     def can_handle_url(self, url: str) -> bool:

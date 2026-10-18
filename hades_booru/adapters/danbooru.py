@@ -163,13 +163,21 @@ class DanbooruAdapter(BooruAdapter):
         page_size = min(200, target_count)
         total_pages = math.ceil(target_count / page_size)
 
-        clean_tags = " ".join(tags.strip().split())
+        user_tokens = [t for t in tags.strip().split() if t]
+        base_tags = " ".join(user_tokens)
+        auth = self._get_auth()
         rating_tag = SERVER_RATING_TAGS.get(rating or "")
-        if rating_tag:
-            clean_tags = f"{clean_tags} {rating_tag}".strip()
+
+        # N6: danbooru.donmai.us enforces a strict 2-tag limit for anonymous queries (HTTP 422).
+        # Only append the server-side rating metatag when the query has <= 1 user tag,
+        # credentials are provided, or we are querying a mirror board.
+        can_inject_rating = bool(
+            rating_tag and (self.id != "danbooru" or auth is not None or len(user_tokens) <= 1)
+        )
+        clean_tags = f"{base_tags} {rating_tag}".strip() if can_inject_rating else base_tags
+
         posts: list[Post] = []
         seen_ids: set[str] = set()
-        auth = self._get_auth()
         self.last_warning = None
 
         for page in range(1, total_pages + 1):
@@ -188,7 +196,17 @@ class DanbooruAdapter(BooruAdapter):
                 params["tags"] = clean_tags
 
             try:
-                batch = http_client.get_json(url, params=params, auth=auth)
+                try:
+                    batch = http_client.get_json(url, params=params, auth=auth)
+                except BooruNetworkError as net_err:
+                    # Fallback if a member account or mirror rejects the extra rating tag with HTTP 422
+                    if net_err.status_code == 422 and can_inject_rating and base_tags:
+                        can_inject_rating = False
+                        clean_tags = base_tags
+                        params["tags"] = clean_tags
+                        batch = http_client.get_json(url, params=params, auth=auth)
+                    else:
+                        raise
                 if not isinstance(batch, list) or not batch:
                     break
 

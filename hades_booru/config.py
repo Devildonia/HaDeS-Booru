@@ -167,5 +167,16 @@ class ConfigManager:
 
             return self.save()
 
+    def clear_credentials(self) -> bool:
+        """Clears all saved API credentials from both session memory and disk (N5)."""
+        with self._lock:
+            self._session_credentials = {
+                k: SourceCredential() for k in self.config.credentials
+            }
+            self.config.credentials = {
+                k: SourceCredential() for k in self.config.credentials
+            }
+            return self.save()
+
 
 config_manager = ConfigManager()

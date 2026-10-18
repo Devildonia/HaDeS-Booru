@@ -77,3 +77,28 @@ def test_semantic_order_and_trigger_word() -> None:
         prompt_no_artist_meta
         == "miku_lora, masterpiece, vocaloid, hatsune miku, blue eyes, twintails, (o_o)"
     )
+
+
+def test_exclude_categories_on_raw_only_posts() -> None:
+    """L4: posts with empty categorized tags (only raw_tags) must still respect exclude_categories."""
+    norm = PromptNormalizer(
+        NormalizerConfig(
+            replace_underscores=True,
+            escape_parentheses=True,
+            filter_junk_tags=False,
+            semantic_order=["copyright", "character", "artist", "general", "meta"],
+            custom_separator=", ",
+        )
+    )
+    raw_only_post = Post(
+        id="202",
+        source_id="generic",
+        source_name="Generic",
+        source_url="https://example.com/202",
+        tags=CategorizedTags(),
+        raw_tags=["1girl", "solo", "highres", "absurdres"],
+    )
+
+    assert norm.format_post_prompt(raw_only_post, exclude_categories=["meta"]) == "1girl, solo"
+    assert norm.format_post_prompt(raw_only_post, exclude_categories=["general"]) == "highres, absurdres"
+    assert norm.format_unified_prompt([raw_only_post], exclude_categories=["meta"]) == "1girl, solo"

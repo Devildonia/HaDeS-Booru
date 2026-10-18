@@ -15,6 +15,14 @@ from hades_booru.adapters.base import BooruAdapter, ProgressCallback
 from hades_booru.http_client import BooruNetworkError, http_client
 from hades_booru.models import COMMON_META_TAGS, CategorizedTags, Post, Rating
 
+# Moebooru filters ratings via `rating:safe`, `rating:questionable`, `rating:explicit` metatags inside `tags`.
+SERVER_RATING_TAGS: dict[str, str] = {
+    "g": "rating:safe",
+    "s": "rating:safe",
+    "q": "rating:questionable",
+    "e": "rating:explicit",
+}
+
 
 def _normalize_rating(raw: str | None) -> Rating:
     if not raw:
@@ -97,6 +105,9 @@ class MoebooruAdapter(BooruAdapter):
         page_size = min(100, target_count)
         total_pages = math.ceil(target_count / page_size)
         clean_tags = " ".join(tags.strip().split())
+        rating_tag = SERVER_RATING_TAGS.get(rating or "")
+        if rating_tag:
+            clean_tags = f"{clean_tags} {rating_tag}".strip()
 
         posts: list[Post] = []
         seen_ids: set[str] = set()
@@ -116,9 +127,6 @@ class MoebooruAdapter(BooruAdapter):
             }
             if clean_tags:
                 params["tags"] = clean_tags
-            if rating in ("g", "s", "q", "e"):
-                # Moebooru supports a first-class `rating` query parameter.
-                params["rating"] = rating
 
             try:
                 batch = http_client.get_json(url, params=params)

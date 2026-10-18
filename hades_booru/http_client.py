@@ -35,11 +35,14 @@ class BooruNetworkError(Exception):
         self.url = url
 
 
+MAX_RETRY_AFTER_SECONDS = 30.0
+
+
 def _retry_after_seconds(headers: Any) -> float:
-    """Parses a numeric Retry-After header into seconds (0.0 when absent/invalid)."""
+    """Parses a numeric Retry-After header into seconds, capped at MAX_RETRY_AFTER_SECONDS (0.0 when absent/invalid)."""
     raw = headers.get("Retry-After", "") if headers is not None else ""
     try:
-        return max(0.0, float(raw))
+        return min(MAX_RETRY_AFTER_SECONDS, max(0.0, float(raw)))
     except (TypeError, ValueError):
         return 0.0
 

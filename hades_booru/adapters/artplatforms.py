@@ -50,6 +50,7 @@ class ArtPlatformsAdapter(BooruAdapter):
         progress_cb: ProgressCallback | None = None,
         rating: str | None = None,  # Art platforms have no rating query param; UI filters client-side.
     ) -> list[Post]:
+        self.last_warning = None
         if self.id in ("generic", "ehentai"):
             raise BooruNetworkError(
                 f"Tag search is not supported on {self.name}. Paste a direct gallery/post URL in the search bar instead."
@@ -213,7 +214,13 @@ class ArtPlatformsAdapter(BooruAdapter):
         limit: int,
         progress_cb: ProgressCallback | None = None,
     ) -> list[Post]:
-        clean_tag = (tags.strip() or "anime").lstrip("#").split()[0]
+        tokens = [t.lstrip("#") for t in (tags.strip() or "anime").split() if t.lstrip("#")]
+        clean_tag = tokens[0] if tokens else "anime"
+        if len(tokens) > 1:
+            self.last_warning = (
+                f"Pawoo timeline API only supports a single hashtag; searched '#{clean_tag}' "
+                f"(ignored: {', '.join(tokens[1:])})"
+            )
         fetch_limit = min(40, limit)
         url = f"https://pawoo.net/api/v1/timelines/tag/{clean_tag}"
 

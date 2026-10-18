@@ -57,7 +57,7 @@ def test_gelbooru_directory_fallback_mapping() -> None:
         "directory": "4210",
         "image": "sample_hash.png",
         "sample": 1,
-        "tags": "1girl solo fate_(series) highres",
+        "tags": "1girl solo fate_(series) artoria_pendragon_(fate) saber_(cosplay) highres",
         "rating": "safe",
         "width": 1024,
         "height": 768,
@@ -66,7 +66,9 @@ def test_gelbooru_directory_fallback_mapping() -> None:
     assert post is not None
     assert post.id == "444222"
     assert post.rating == "g"
-    assert "fate_(series)" in post.tags.character
+    assert "fate_(series)" in post.tags.copyright
+    assert "artoria_pendragon_(fate)" in post.tags.character
+    assert "saber_(cosplay)" in post.tags.general
     assert "highres" in post.tags.meta
     assert post.file_url == "https://safebooru.org/images/4210/sample_hash.png"
     assert post.sample_url == "https://safebooru.org/samples/4210/sample_sample_hash.jpg"
@@ -96,6 +98,12 @@ def test_e621_lore_and_species_mapping() -> None:
     assert "canid" in post.tags.general
     assert "star_fox_(lore)" in post.tags.general
     assert post.tags.copyright == ["nintendo"]
+
+    # L12: E926 is the SFW mirror where "s" means Safe/General ("g")
+    e926_adapter = E621Adapter("e926", "E926", "e926.net")
+    e926_post = e926_adapter._map_post(raw)
+    assert e926_post is not None
+    assert e926_post.rating == "g"
 
 
 def test_philomena_derpibooru_mapping() -> None:

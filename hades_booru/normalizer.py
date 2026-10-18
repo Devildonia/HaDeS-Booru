@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-from hades_booru.models import NormalizerConfig, Post, TagCategory
+from hades_booru.models import COMMON_META_TAGS, NormalizerConfig, Post, TagCategory
 
 KAOMOJI_SET: set[str] = {
     "^_^",
@@ -154,7 +154,23 @@ class PromptNormalizer:
                 category_tags: list[str] = getattr(post.tags, category, [])
                 ordered_raw.extend(category_tags)
         else:
-            ordered_raw.extend(post.raw_tags)
+            # L4: partition uncategorized raw_tags into general vs meta so exclude_categories is respected.
+            fallback_buckets: dict[TagCategory, list[str]] = {
+                "copyright": [],
+                "character": [],
+                "artist": [],
+                "general": [],
+                "meta": [],
+            }
+            for raw in post.raw_tags:
+                if raw.strip().lower() in COMMON_META_TAGS:
+                    fallback_buckets["meta"].append(raw)
+                else:
+                    fallback_buckets["general"].append(raw)
+            for category in self.config.semantic_order:
+                if category in excluded:
+                    continue
+                ordered_raw.extend(fallback_buckets[category])
 
         result: list[str] = []
         seen: set[str] = set()
@@ -210,7 +226,11 @@ class PromptNormalizer:
                 for cat in ("copyright", "character", "artist", "general", "meta"):
                     bucket[cat].extend(getattr(post.tags, cat, []))
             else:
-                bucket["general"].extend(post.raw_tags)
+                for raw in post.raw_tags:
+                    if raw.strip().lower() in COMMON_META_TAGS:
+                        bucket["meta"].append(raw)
+                    else:
+                        bucket["general"].append(raw)
 
         combined_raw: list[str] = []
         for category in self.config.semantic_order:

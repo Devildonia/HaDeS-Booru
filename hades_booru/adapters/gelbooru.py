@@ -35,7 +35,34 @@ def _normalize_rating(raw: str | None) -> Rating:
     return "u"
 
 
+COPYRIGHT_SUFFIXES = (
+    "_(series)",
+    "_(game)",
+    "_(anime)",
+    "_(manga)",
+    "_(franchise)",
+    "_(movie)",
+    "_(ova)",
+    "_(visual_novel)",
+    "_(light_novel)",
+    "_(comic)",
+    "_(webtoon)",
+    "_(show)",
+)
+
+GENERAL_PAREN_SUFFIXES = (
+    "_(cosplay)",
+    "_(costume)",
+    "_(outfit)",
+    "_(weapon)",
+    "_(object)",
+    "_(vehicle)",
+    "_(meme)",
+)
+
+
 def _categorize_flat_tags(raw_tags: list[str]) -> CategorizedTags:
+    copyright_tags: list[str] = []
     general: list[str] = []
     meta: list[str] = []
     character: list[str] = []
@@ -44,13 +71,17 @@ def _categorize_flat_tags(raw_tags: list[str]) -> CategorizedTags:
         lower = tag.lower()
         if lower in COMMON_META_TAGS:
             meta.append(tag)
+        elif lower.endswith(COPYRIGHT_SUFFIXES):
+            copyright_tags.append(tag)
+        elif lower.endswith(GENERAL_PAREN_SUFFIXES):
+            general.append(tag)
         elif "_(" in tag and tag.endswith(")"):
             character.append(tag)
         else:
             general.append(tag)
 
     return CategorizedTags(
-        copyright=[],
+        copyright=copyright_tags,
         character=character,
         artist=[],
         general=general,
