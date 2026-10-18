@@ -1,4 +1,4 @@
-# HaDeS Booru v1.0.1
+# HaDeS Booru v1.0.2
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -92,17 +92,25 @@ python -m pytest
 python -m ruff check .
 ```
 
-## Release Notes — v1.0.1
+## Release Notes — v1.0.2
 
-**New features & fixes**
+**Fixes & hardening (follow-up to v1.0.1)**
 
-- **Server-side rating filter**: when you pick a rating (G/S/Q/E), the query is sent to the source API where supported — Danbooru v2 boards (`rating:general`/`sensitive`/`questionable`/`explicit` tags, with anonymous 2-tag limit awareness and automatic HTTP 422 fallback), Moebooru boards (`rating:safe`/`questionable`/`explicit` metatags), E621/E926 (`rating:s|q|e` metatags, with E926 SFW rating normalization), and DAPI boards (`rating:s|q|e` tags) — instead of downloading everything and filtering locally.
-- **Credential security & management**: saved credentials use generic masked placeholders so neither `user_id` nor `api_key` values are serialized into Gradio's `/config` payload, plus a new action to clear saved credentials from disk.
+- **Server-side rating filter refinements**: Danbooru v2 boards now respect the anonymous 2-tag limit (the rating metatag is only injected when safe, with an automatic HTTP 422 fallback), Moebooru boards use their canonical `rating:safe`/`questionable`/`explicit` metatags, and E621/E926 use `rating:s|q|e` metatags with E926 SFW rating normalization.
+- **Credential security & management**: saved credentials use generic masked placeholders so neither `user_id` nor `api_key` values are serialized into Gradio's `/config` payload, plus a new action to clear saved credentials from memory and disk.
 - **Thread-safe adapter warnings & bounded retry**: `BooruAdapter.last_warning` is isolated per thread via `threading.local()`, and HTTP 429 `Retry-After` waits are capped at 30 seconds.
 - **Cross-platform fix**: "open folder in explorer" on macOS/Linux no longer crashes (an invalid `check=` kwarg was passed to `subprocess.Popen`, which only `subprocess.run` accepts).
 - **Normalizer & taxonomy**: `exclude_categories` now filters `raw_tags`-only posts (Zerochan, Art Platforms), Gelbooru franchise suffixes (`_(series)`, `_(game)`, etc.) and `_(cosplay)` are categorized accurately, and multi-tag Pawoo queries notify when truncated to the first hashtag.
-- **Locked, auditable dependencies**: `requirements.lock` pins the full dependency tree for reproducible installs, and CI runs `pip-audit` against it on every push.
+- **i18n**: restored the Spanish "o" in the search placeholder (it had regressed to the English "or").
 - Test suite grows to 46 tests.
+
+## Release Notes — v1.0.1
+
+**New features**
+
+- **Server-side rating filter**: when you pick a rating (G/S/Q/E), the query is now sent to the source API where it is supported — Danbooru v2 boards (`rating:safe`/`sensitive`/`questionable`/`explicit` tags), Moebooru boards (`rating` parameter), E621/E926 (`rating[]` parameter), and DAPI boards (`rating:s|q|e` tags) — instead of downloading everything and filtering locally. Sources without server-side support keep the client-side safety filter, and "Unrated" (which no API can pre-filter) always falls back to it.
+- **Locked, auditable dependencies**: `requirements.lock` pins the full dependency tree for reproducible installs, and CI now runs `pip-audit` against it on every push.
+- Test suite grows to 39 tests.
 
 ## Release Notes — v1.0.0
 

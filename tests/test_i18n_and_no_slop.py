@@ -41,15 +41,15 @@ def test_i18n_en_es_key_parity() -> None:
     assert t("es", "search_btn") == "Buscar"
 
 
-def test_logo_h_webp_and_version_1_0_1_in_header() -> None:
+def test_logo_h_webp_and_version_1_0_2_in_header() -> None:
     from hades_booru import __version__
 
-    assert __version__ == "1.0.1"
+    assert __version__ == "1.0.2"
     assert LOGO_DATA_URI.startswith("data:image/webp;base64,")
     header = render_header_html("en")
     assert 'class="hades-logo-img"' in header
     assert "data:image/webp;base64," in header
-    assert "v1.0.1" in header
+    assert "v1.0.2" in header
 
 
 def test_inspector_nav_badge_and_status_pill() -> None:
