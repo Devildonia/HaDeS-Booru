@@ -13,8 +13,8 @@ from pathlib import Path
 
 from hades_booru import __version__
 from hades_booru.i18n import t
-from hades_booru.models import Post
-from hades_booru.normalizer import PromptNormalizer
+from hades_booru.models import ExtractedImageMeta, Post
+from hades_booru.normalizer import PromptNormalizer, normalize_tag_key, parse_tag_list
 
 RATING_COLORS: dict[str, str] = {
     "g": "#10b981",
@@ -137,6 +137,75 @@ def render_inspector_nav_badge_html(
 def render_section_header_html(title: str) -> str:
     """Renders a clean uppercase Bento card header."""
     return f'<div class="hades-section-header">{html.escape(title)}</div>'
+
+
+def render_blacklist_chips_html(
+    default_list: list[str],
+    personal_list: list[str],
+    whitelist_list: list[str],
+    lang: str = "en",
+) -> str:
+    """Renders the active tag filter as chips: defaults, personal blacklist (accented), whitelist."""
+    personal_keys = {normalize_tag_key(x) for x in personal_list}
+    seen: set[str] = set()
+
+    chips: list[str] = []
+    for tag in [*default_list, *personal_list]:
+        key = normalize_tag_key(tag)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        is_personal = key in personal_keys
+        css = "tag-chip tag-chip-personal" if is_personal else "tag-chip"
+        badge = ' <span class="hades-chip-badge">+</span>' if is_personal else ""
+        chips.append(f'<span class="{css}">{html.escape(tag)}{badge}</span>')
+
+    white_chips: list[str] = []
+    for tag in whitelist_list:
+        key = normalize_tag_key(tag)
+        if not key:
+            continue
+        white_chips.append(f'<span class="tag-chip tag-chip-kept">{html.escape(tag)}</span>')
+
+    if not chips and not white_chips:
+        empty = html.escape(t(lang, "filter_chips_empty"))
+        return f'<div class="hades-chip-row">{empty}</div>'
+
+    html_parts = [f'<div class="hades-chip-row">{" ".join(chips)}</div>']
+    if white_chips:
+        kept_label = html.escape(t(lang, "filter_chips_kept_label"))
+        html_parts.append(
+            f'<div class="hades-chip-row hades-chip-kept-row">'
+            f'<span class="hades-chip-kept-label">{kept_label}</span>'
+            f' {" ".join(white_chips)}</div>'
+        )
+    return "".join(html_parts)
+
+
+def render_extract_result_html(
+    meta: ExtractedImageMeta,
+    normalizer: PromptNormalizer,
+    lang: str = "en",
+) -> str:
+    """Renders the extracted positive tags (through the active normalizer) as chips.
+
+    Negative-prompt tags live in their own box; chips represent the positive
+    prompt that would be used for training.
+    """
+    chips: list[str] = []
+    for raw in parse_tag_list(meta.prompt or ""):
+        clean = normalizer.sanitize_tag(raw)
+        if clean is None:
+            suffix = html.escape(t(lang, "inspector_filtered_suffix"))
+            chips.append(
+                f'<span class="tag-chip tag-general" style="opacity: 0.45; text-decoration: line-through;">'
+                f"{html.escape(raw)} {suffix}</span>"
+            )
+        else:
+            chips.append(f'<span class="tag-chip tag-general">{html.escape(clean)}</span>')
+    if not chips:
+        return ""
+    return f'<div class="hades-chip-row">{" ".join(chips)}</div>'
 
 
 def render_post_inspector_html(

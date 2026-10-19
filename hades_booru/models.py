@@ -171,6 +171,10 @@ class NormalizerConfig(BaseModel):
     escape_parentheses: bool = True
     filter_junk_tags: bool = True
     junk_tags_list: list[str] = Field(default_factory=lambda: list(DEFAULT_JUNK_TAGS))
+    # Personal user lists (v1.0.3): blacklist EXTENDS the default junk list,
+    # whitelist OVERRIDES it (whitelisted tags are always preserved).
+    user_blacklist: list[str] = Field(default_factory=list)
+    user_whitelist: list[str] = Field(default_factory=list)
     semantic_order: list[TagCategory] = Field(default_factory=lambda: list(DEFAULT_SEMANTIC_ORDER))
     custom_separator: str = ", "
 
@@ -187,6 +191,24 @@ class ExportConfig(BaseModel):
     exclude_categories: list[TagCategory] = Field(default_factory=list)
     local_export_dir: str = "./exports"
     download_high_res: bool = True
+
+
+class ExtractedImageMeta(BaseModel):
+    """Result of local metadata extraction from an image file (v1.0.3 Image to Prompt)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    format: str = ""
+    width: int = 0
+    height: int = 0
+    found: bool = False
+    sources: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    prompt: str | None = None  # positive prompt text (verbatim)
+    negative: str | None = None  # negative prompt text (SD / ComfyUI)
+    settings: str | None = None  # generation settings (Steps, Sampler, Seed, ...)
+    rating: str | None = None
+    source_url: str | None = None
 
 
 class SourceCredential(BaseModel):

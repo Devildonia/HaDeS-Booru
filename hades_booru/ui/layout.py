@@ -29,6 +29,11 @@ from hades_booru.i18n import (
     t,
 )
 from hades_booru.image_cache import image_cache
+from hades_booru.metadata_extractor import (
+    MetadataExtractionError,
+    extract_image_metadata,
+    format_settings_lines,
+)
 from hades_booru.models import (
     DEFAULT_JUNK_TAGS,
     DEFAULT_SEMANTIC_ORDER,
@@ -38,9 +43,11 @@ from hades_booru.models import (
     Post,
     TagCategory,
 )
-from hades_booru.normalizer import PromptNormalizer
+from hades_booru.normalizer import PromptNormalizer, add_tags, normalize_tag_key, parse_tag_list, remove_tags
 from hades_booru.ui.components import (
+    render_blacklist_chips_html,
     render_export_stats_html,
+    render_extract_result_html,
     render_header_html,
     render_inspector_nav_badge_html,
     render_post_inspector_html,
@@ -74,11 +81,16 @@ def build_normalizer_from_ui(
         if c not in order:
             order.append(c)
 
+    # v1.0.3: carry the personal blacklist/whitelist across config rebuilds so
+    # UI-driven refreshes never silently wipe the user's personal lists.
+    prev_norm = config_manager.config.normalizer
     cfg = NormalizerConfig(
         replace_underscores=replace_underscores,
         escape_parentheses=escape_parens,
         filter_junk_tags=filter_junk,
         junk_tags_list=junk_list,
+        user_blacklist=list(prev_norm.user_blacklist),
+        user_whitelist=list(prev_norm.user_whitelist),
         semantic_order=order,
         custom_separator=separator or ", ",
     )
@@ -259,6 +271,13 @@ def create_gradio_app() -> gr.Blocks:
                             elem_classes=["hades-copy-btn"],
                         )
 
+                        blacklist_post_btn = gr.Button(
+                            t(lang, "blacklist_post_btn"),
+                            size="sm",
+                            variant="secondary",
+                            elem_classes=["hades-copy-btn"],
+                        )
+
                         inspector_html = gr.HTML(value=initial_inspector)
 
             # =========================================================================
@@ -373,7 +392,128 @@ def create_gradio_app() -> gr.Blocks:
                             local_export_status = gr.Markdown("")
 
             # =========================================================================
-            # TAB 3: SYMMETRIC 6:6 NORMALIZATION & 2x2 API CREDENTIALS GRID
+            # TAB 3: IMAGE TO PROMPT (v1.0.3) — local metadata extraction
+            # =========================================================================
+            with gr.TabItem(t(lang, "tab_extract")) as tab_extract_item:
+                extract_heading_hdr = gr.HTML(
+                    render_section_header_html(t(lang, "extract_heading"))
+                )
+                extract_sub_md = gr.Markdown(t(lang, "extract_subheading"))
+                extract_file_input = gr.File(
+                    label=t(lang, "extract_file_label"),
+                    file_count="single",
+                    file_types=[".png", ".jpg", ".jpeg", ".webp"],
+                )
+                extract_preview = gr.Image(
+                    label=t(lang, "extract_preview_label"),
+                    type="filepath",
+                    interactive=False,
+                    height=320,
+                )
+                extract_btn = gr.Button(t(lang, "extract_btn"), variant="primary")
+                extract_status_box = gr.HTML(value="")
+                extract_info_md = gr.Markdown("")
+                extract_positive_box = gr.Textbox(
+                    label=t(lang, "extract_positive_label"),
+                    lines=5,
+                    max_lines=10,
+                    buttons=["copy"],
+                    interactive=False,
+                )
+                extract_negative_box = gr.Textbox(
+                    label=t(lang, "extract_negative_label"),
+                    lines=3,
+                    max_lines=8,
+                    buttons=["copy"],
+                    interactive=False,
+                )
+                extract_settings_box = gr.Textbox(
+                    label=t(lang, "extract_settings_label"),
+                    lines=4,
+                    max_lines=10,
+                    buttons=["copy"],
+                    interactive=False,
+                )
+                extract_tags_html = gr.HTML(value="")
+
+            # =========================================================================
+            # TAB 4: PERSONAL TAG LIST (v1.0.3) — dedicated panel
+            # =========================================================================
+            with gr.TabItem(t(lang, "tab_personal")) as tab_personal_item:
+                personal_heading_hdr = gr.HTML(
+                    render_section_header_html(t(lang, "personal_list_heading"))
+                )
+                personal_sub_md = gr.Markdown(t(lang, "personal_subheading"))
+                personal_chips_box = gr.HTML(
+                    value=render_blacklist_chips_html(
+                        norm_cfg.junk_tags_list,
+                        norm_cfg.user_blacklist,
+                        norm_cfg.user_whitelist,
+                        lang=lang,
+                    )
+                )
+                with gr.Row():
+                    # Left Card: Blacklist (always excluded)
+                    with gr.Column(scale=1, variant="panel"):
+                        personal_bl_hdr = gr.HTML(render_section_header_html(t(lang, "blacklist_heading")))
+                        with gr.Row():
+                            blacklist_add_input = gr.Textbox(
+                                placeholder=t(lang, "blacklist_add_placeholder"),
+                                scale=3,
+                            )
+                            blacklist_add_btn = gr.Button(
+                                t(lang, "blacklist_add_btn"),
+                                variant="secondary",
+                                size="sm",
+                                scale=1,
+                            )
+                        with gr.Row():
+                            blacklist_remove_input = gr.Textbox(
+                                placeholder=t(lang, "blacklist_remove_placeholder"),
+                                scale=3,
+                            )
+                            blacklist_remove_btn = gr.Button(
+                                t(lang, "blacklist_remove_btn"),
+                                variant="secondary",
+                                size="sm",
+                                scale=1,
+                            )
+                    # Right Card: Whitelist (always kept)
+                    with gr.Column(scale=1, variant="panel"):
+                        personal_wl_hdr = gr.HTML(render_section_header_html(t(lang, "whitelist_heading")))
+                        with gr.Row():
+                            whitelist_add_input = gr.Textbox(
+                                placeholder=t(lang, "whitelist_add_placeholder"),
+                                scale=3,
+                            )
+                            whitelist_add_btn = gr.Button(
+                                t(lang, "whitelist_add_btn"),
+                                variant="secondary",
+                                size="sm",
+                                scale=1,
+                            )
+                        with gr.Row():
+                            whitelist_remove_input = gr.Textbox(
+                                placeholder=t(lang, "whitelist_remove_placeholder"),
+                                scale=3,
+                            )
+                            whitelist_remove_btn = gr.Button(
+                                t(lang, "whitelist_remove_btn"),
+                                variant="secondary",
+                                size="sm",
+                                scale=1,
+                            )
+                with gr.Row():
+                    reset_personal_btn = gr.Button(
+                        t(lang, "reset_personal_btn"),
+                        variant="secondary",
+                        size="sm",
+                        scale=1,
+                    )
+                personal_status_md = gr.Markdown("")
+
+            # =========================================================================
+            # TAB 5: SYMMETRIC 6:6 NORMALIZATION & 2x2 API CREDENTIALS GRID
             # =========================================================================
             with gr.TabItem(t(lang, "tab_settings")) as tab_settings_item:
                 with gr.Row():
@@ -918,6 +1058,41 @@ def create_gradio_app() -> gr.Blocks:
                 gr.update(label=t(effective_lang, "persist_creds_label")),
                 gr.update(value=t(effective_lang, "save_creds_btn")),
                 gr.update(value=t(effective_lang, "clear_creds_btn")),
+                # v1.0.3: new tabs & personal lists
+                gr.update(label=t(effective_lang, "tab_extract")),
+                gr.update(label=t(effective_lang, "tab_personal")),
+                gr.update(value=t(effective_lang, "blacklist_post_btn")),
+                render_section_header_html(t(effective_lang, "personal_list_heading")),
+                t(effective_lang, "personal_subheading"),
+                render_blacklist_chips_html(
+                    config_manager.config.normalizer.junk_tags_list,
+                    config_manager.config.normalizer.user_blacklist,
+                    config_manager.config.normalizer.user_whitelist,
+                    lang=effective_lang,
+                ),
+                render_section_header_html(t(effective_lang, "blacklist_heading")),
+                render_section_header_html(t(effective_lang, "whitelist_heading")),
+                gr.update(placeholder=t(effective_lang, "blacklist_add_placeholder")),
+                gr.update(value=t(effective_lang, "blacklist_add_btn")),
+                gr.update(placeholder=t(effective_lang, "blacklist_remove_placeholder")),
+                gr.update(value=t(effective_lang, "blacklist_remove_btn")),
+                gr.update(placeholder=t(effective_lang, "whitelist_add_placeholder")),
+                gr.update(value=t(effective_lang, "whitelist_add_btn")),
+                gr.update(placeholder=t(effective_lang, "whitelist_remove_placeholder")),
+                gr.update(value=t(effective_lang, "whitelist_remove_btn")),
+                gr.update(value=t(effective_lang, "reset_personal_btn")),
+                "",
+                render_section_header_html(t(effective_lang, "extract_heading")),
+                t(effective_lang, "extract_subheading"),
+                gr.update(label=t(effective_lang, "extract_file_label")),
+                gr.update(label=t(effective_lang, "extract_preview_label")),
+                gr.update(value=t(effective_lang, "extract_btn")),
+                render_status_pill_html(t(effective_lang, "status_ready"), lang=effective_lang, state="ready"),
+                "",
+                gr.update(label=t(effective_lang, "extract_positive_label")),
+                gr.update(label=t(effective_lang, "extract_negative_label")),
+                gr.update(label=t(effective_lang, "extract_settings_label")),
+                "",
             )
 
         def on_gallery_select(
@@ -1113,6 +1288,269 @@ def create_gradio_app() -> gr.Blocks:
             config_manager.clear_credentials()
             return (t(cur_lang, "creds_cleared_msg"), *_cred_textbox_updates(cur_lang))
 
+        # =========================================================================
+        # v1.0.3: PERSONAL TAG LIST (BLACKLIST / WHITELIST) HANDLERS
+        # =========================================================================
+        def _personal_chips(cur_lang: str) -> str:
+            n = config_manager.config.normalizer
+            return render_blacklist_chips_html(
+                n.junk_tags_list, n.user_blacklist, n.user_whitelist, lang=cur_lang
+            )
+
+        def personal_list_handler(
+            kind: str,
+            tag_text: str,
+            cur_lang: str,
+            posts: list[Post],
+            sel_idx: int,
+            replace_u: bool,
+            escape_p: bool,
+            filter_j: bool,
+            junk_str: str,
+            sem_order: str,
+            sep: str,
+            exp_mode: ExportMode,
+            trig_word: str,
+            prefix_str: str,
+            excl_cats: list[TagCategory],
+            inc_header: bool,
+        ) -> tuple[Any, ...]:
+            norm_live = config_manager.config.normalizer
+            new_tags = parse_tag_list(tag_text)
+            if not new_tags:
+                # 7 values to match personal_view_outputs: chips + status + 5 no-op views
+                # (gr.skip() leaves the current gallery/inspector/export views untouched).
+                return (
+                    _personal_chips(cur_lang),
+                    t(cur_lang, "personal_not_found", tags=""),
+                    gr.skip(),
+                    gr.skip(),
+                    gr.skip(),
+                    gr.skip(),
+                    gr.skip(),
+                )
+
+            if kind == "blacklist_add":
+                norm_live.user_blacklist, added = add_tags(list(norm_live.user_blacklist), new_tags)
+                if not added:
+                    msg = t(cur_lang, "personal_not_found", tags=", ".join(new_tags))
+                else:
+                    msg = t(cur_lang, "personal_added", tags=", ".join(added))
+            elif kind == "whitelist_add":
+                norm_live.user_whitelist, added = add_tags(list(norm_live.user_whitelist), new_tags)
+                if not added:
+                    msg = t(cur_lang, "personal_not_found", tags=", ".join(new_tags))
+                else:
+                    msg = t(cur_lang, "personal_whitelisted", tags=", ".join(added))
+            elif kind == "blacklist_remove":
+                norm_live.user_blacklist, removed = remove_tags(list(norm_live.user_blacklist), new_tags)
+                if not removed:
+                    msg = t(cur_lang, "personal_not_found", tags=", ".join(new_tags))
+                else:
+                    msg = t(cur_lang, "personal_removed", tags=", ".join(removed))
+            else:  # whitelist_remove
+                norm_live.user_whitelist, removed = remove_tags(list(norm_live.user_whitelist), new_tags)
+                if not removed:
+                    msg = t(cur_lang, "personal_not_found", tags=", ".join(new_tags))
+                else:
+                    msg = t(cur_lang, "personal_removed", tags=", ".join(removed))
+
+            config_manager.save()
+            refresh = refresh_views(
+                posts,
+                sel_idx,
+                cur_lang,
+                replace_u,
+                escape_p,
+                filter_j,
+                junk_str,
+                sem_order,
+                sep,
+                exp_mode,
+                trig_word,
+                prefix_str,
+                excl_cats,
+                inc_header,
+                persist=True,
+            )
+            return _personal_chips(cur_lang), msg, *refresh
+
+        def reset_personal_handler(
+            cur_lang: str,
+            posts: list[Post],
+            sel_idx: int,
+            replace_u: bool,
+            escape_p: bool,
+            filter_j: bool,
+            junk_str: str,
+            sem_order: str,
+            sep: str,
+            exp_mode: ExportMode,
+            trig_word: str,
+            prefix_str: str,
+            excl_cats: list[TagCategory],
+            inc_header: bool,
+        ) -> tuple[Any, ...]:
+            norm_live = config_manager.config.normalizer
+            norm_live.user_blacklist = []
+            norm_live.user_whitelist = []
+            config_manager.save()
+            refresh = refresh_views(
+                posts,
+                sel_idx,
+                cur_lang,
+                replace_u,
+                escape_p,
+                filter_j,
+                junk_str,
+                sem_order,
+                sep,
+                exp_mode,
+                trig_word,
+                prefix_str,
+                excl_cats,
+                inc_header,
+                persist=True,
+            )
+            return _personal_chips(cur_lang), t(cur_lang, "personal_reset_done"), *refresh
+
+        def blacklist_post_handler(
+            cur_lang: str,
+            posts: list[Post],
+            sel_idx: int,
+            replace_u: bool,
+            escape_p: bool,
+            filter_j: bool,
+            junk_str: str,
+            sem_order: str,
+            sep: str,
+            exp_mode: ExportMode,
+            trig_word: str,
+            prefix_str: str,
+            excl_cats: list[TagCategory],
+            inc_header: bool,
+        ) -> tuple[Any, ...]:
+            norm = build_normalizer_from_ui(replace_u, escape_p, filter_j, junk_str, sem_order, sep, persist=False)
+            eff_idx = sel_idx if posts and 0 <= sel_idx < len(posts) else 0
+            post = posts[eff_idx] if posts else None
+            if post is None:
+                return _personal_chips(cur_lang), t(cur_lang, "blacklist_post_none"), "", "", "", "", ""
+
+            all_raw: list[str] = []
+            for cat in ("copyright", "character", "artist", "general", "meta"):
+                all_raw.extend(getattr(post.tags, cat) or [])
+            all_raw.extend(post.raw_tags or [])
+
+            filtered: list[str] = []
+            seen: set[str] = set()
+            for raw in all_raw:
+                if not raw or norm.sanitize_tag(raw) is not None:
+                    continue
+                key = normalize_tag_key(raw)
+                if key and key not in seen:
+                    seen.add(key)
+                    filtered.append(raw)
+
+            if not filtered:
+                return _personal_chips(cur_lang), t(cur_lang, "blacklist_post_none"), "", "", "", "", ""
+
+            norm_live = config_manager.config.normalizer
+            norm_live.user_blacklist, added = add_tags(list(norm_live.user_blacklist), filtered)
+            config_manager.save()
+            refresh = refresh_views(
+                posts,
+                eff_idx,
+                cur_lang,
+                replace_u,
+                escape_p,
+                filter_j,
+                junk_str,
+                sem_order,
+                sep,
+                exp_mode,
+                trig_word,
+                prefix_str,
+                excl_cats,
+                inc_header,
+                persist=True,
+            )
+            msg = t(cur_lang, "blacklist_post_done", count=len(added))
+            return _personal_chips(cur_lang), msg, *refresh
+
+        # =========================================================================
+        # v1.0.3: IMAGE TO PROMPT HANDLER (local metadata extraction)
+        # =========================================================================
+        def extract_handler(
+            file_val: Any,
+            cur_lang: str,
+            trig_word: str,
+            replace_u: bool,
+            escape_p: bool,
+            filter_j: bool,
+            junk_str: str,
+            sem_order: str,
+            sep: str,
+        ) -> tuple[Any, ...]:
+            path: str | None = None
+            if isinstance(file_val, (list, tuple)):
+                file_val = file_val[0] if file_val else None
+            if file_val is not None:
+                path = file_val if isinstance(file_val, str) else getattr(file_val, "name", None)
+
+            if not path:
+                # No file selected (e.g. user cleared the input): leave the UI as-is.
+                return gr.skip()
+
+            norm = build_normalizer_from_ui(replace_u, escape_p, filter_j, junk_str, sem_order, sep, persist=False)
+            try:
+                meta = extract_image_metadata(path)
+            except MetadataExtractionError as err:
+                return (
+                    render_status_pill_html(t(cur_lang, "extract_error", error=str(err)), lang=cur_lang, state="error"),
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                )
+            except Exception as err:  # Defensive: unexpected Pillow failure must not crash the UI
+                return (
+                    render_status_pill_html(t(cur_lang, "extract_error", error=str(err)), lang=cur_lang, state="error"),
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                )
+
+            info_bits = [t(cur_lang, "extract_info_format", fmt=meta.format, w=meta.width, h=meta.height)]
+            if meta.rating:
+                info_bits.append(t(cur_lang, "extract_rating", rating=meta.rating))
+            if meta.source_url:
+                info_bits.append(t(cur_lang, "extract_source", url=meta.source_url))
+            info_md = "  ·  ".join(info_bits)
+
+            pos_body = norm.format_tags(parse_tag_list(meta.prompt or ""))
+            neg_body = norm.format_tags(parse_tag_list(meta.negative or ""))
+            prefix = (trig_word or "").strip().rstrip(",")
+            if prefix and pos_body:
+                positive_text = f"{prefix}{norm.config.custom_separator}{pos_body}"
+            else:
+                positive_text = prefix or pos_body
+            negative_text = neg_body
+            settings_text = format_settings_lines(meta.settings or "")
+
+            tags_html = render_extract_result_html(meta, norm, lang=cur_lang)
+            if meta.found:
+                status_html = render_status_pill_html(
+                    t(cur_lang, "extract_success", tags=len(meta.tags), sources=", ".join(meta.sources)),
+                    lang=cur_lang,
+                    state="ready",
+                )
+            else:
+                status_html = render_status_pill_html(t(cur_lang, "extract_no_meta"), lang=cur_lang, state="warn")
+            return status_html, info_md, positive_text, negative_text, settings_text, tags_html
+
         # Wire search events
         search_outputs = [
             posts_state,
@@ -1236,6 +1674,35 @@ def create_gradio_app() -> gr.Blocks:
                 persist_creds_chk,
                 save_creds_btn,
                 clear_creds_btn,
+                tab_extract_item,
+                tab_personal_item,
+                blacklist_post_btn,
+                personal_heading_hdr,
+                personal_sub_md,
+                personal_chips_box,
+                personal_bl_hdr,
+                personal_wl_hdr,
+                blacklist_add_input,
+                blacklist_add_btn,
+                blacklist_remove_input,
+                blacklist_remove_btn,
+                whitelist_add_input,
+                whitelist_add_btn,
+                whitelist_remove_input,
+                whitelist_remove_btn,
+                reset_personal_btn,
+                personal_status_md,
+                extract_heading_hdr,
+                extract_sub_md,
+                extract_file_input,
+                extract_preview,
+                extract_btn,
+                extract_status_box,
+                extract_info_md,
+                extract_positive_box,
+                extract_negative_box,
+                extract_settings_box,
+                extract_tags_html,
             ],
         )
 
@@ -1327,6 +1794,84 @@ def create_gradio_app() -> gr.Blocks:
             fn=persist_settings_only,
             inputs=[*norm_inputs, *export_inputs],
             outputs=[],
+        )
+
+        # v1.0.3: Personal tag list wiring (blacklist / whitelist)
+        personal_view_outputs = [
+            personal_chips_box,
+            personal_status_md,
+            selected_prompt_box,
+            nav_badge_box,
+            inspector_html,
+            export_preview_box,
+            export_stats_box,
+        ]
+        personal_common_inputs = [
+            lang_dropdown,
+            posts_state,
+            selected_idx_state,
+            *norm_inputs,
+            *export_inputs,
+        ]
+        blacklist_add_btn.click(
+            fn=lambda text, *args: personal_list_handler("blacklist_add", text, *args),
+            inputs=[blacklist_add_input, *personal_common_inputs],
+            outputs=personal_view_outputs,
+        ).then(fn=lambda: "", inputs=[], outputs=[blacklist_add_input])
+        blacklist_remove_btn.click(
+            fn=lambda text, *args: personal_list_handler("blacklist_remove", text, *args),
+            inputs=[blacklist_remove_input, *personal_common_inputs],
+            outputs=personal_view_outputs,
+        ).then(fn=lambda: "", inputs=[], outputs=[blacklist_remove_input])
+        whitelist_add_btn.click(
+            fn=lambda text, *args: personal_list_handler("whitelist_add", text, *args),
+            inputs=[whitelist_add_input, *personal_common_inputs],
+            outputs=personal_view_outputs,
+        ).then(fn=lambda: "", inputs=[], outputs=[whitelist_add_input])
+        whitelist_remove_btn.click(
+            fn=lambda text, *args: personal_list_handler("whitelist_remove", text, *args),
+            inputs=[whitelist_remove_input, *personal_common_inputs],
+            outputs=personal_view_outputs,
+        ).then(fn=lambda: "", inputs=[], outputs=[whitelist_remove_input])
+
+        reset_personal_btn.click(
+            fn=reset_personal_handler,
+            inputs=personal_common_inputs,
+            outputs=personal_view_outputs,
+        )
+
+        blacklist_post_btn.click(
+            fn=blacklist_post_handler,
+            inputs=[lang_dropdown, posts_state, selected_idx_state, *norm_inputs, *export_inputs],
+            outputs=personal_view_outputs,
+        )
+
+        # v1.0.3: Image to Prompt wiring (local metadata extraction)
+        extract_view_outputs = [
+            extract_status_box,
+            extract_info_md,
+            extract_positive_box,
+            extract_negative_box,
+            extract_settings_box,
+            extract_tags_html,
+        ]
+        extract_file_input.change(
+            fn=lambda f: f
+            if isinstance(f, str)
+            else (f[0] if isinstance(f, (list, tuple)) and f else None),
+            inputs=[extract_file_input],
+            outputs=[extract_preview],
+        ).then(
+            # v1.0.3 UX: extraction runs automatically when the file lands,
+            # no need to hunt for the button.
+            fn=extract_handler,
+            inputs=[extract_file_input, lang_dropdown, trigger_word_input, *norm_inputs],
+            outputs=extract_view_outputs,
+        )
+        extract_btn.click(
+            fn=extract_handler,
+            inputs=[extract_file_input, lang_dropdown, trigger_word_input, *norm_inputs],
+            outputs=extract_view_outputs,
         )
 
         # Export & Local Folder actions

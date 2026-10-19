@@ -1,4 +1,4 @@
-# HaDeS Booru v1.0.2
+# HaDeS Booru v1.0.3
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -91,6 +91,19 @@ pip install -r requirements-dev.txt
 python -m pytest
 python -m ruff check .
 ```
+
+## Release Notes — v1.0.3
+
+**Personal tag filtering + Image to Prompt**
+
+- **Personal tag blacklist**: extend the default excluded-tag list with your own tags (comma or newline separated, `*` wildcard supported) from a dedicated panel in the Normalization tab. Entries are persisted in `config.local.json` and "Reset Default Excluded Tags" no longer wipes your personal list.
+- **Personal tag whitelist**: force-keep tags that would otherwise be filtered (e.g. `commission`), even if they appear in the defaults or your blacklist. Wildcards supported.
+- **One-click post blacklist**: from the Inspector dock, a new button adds every currently-filtered tag of the selected post to your personal blacklist at once.
+- **Image to Prompt (new tab)**: drag & drop a PNG/JPEG/WebP and its embedded data is extracted **automatically on drop, 100% locally** — Stable Diffusion / A1111 `parameters`, ComfyUI prompt graphs (decoded from JSON), booru `comment` tEXt chunks (e.g. Bilibili), NovelAI-style `prompt` chunks, Civitai XMP, and JPEG/WebP EXIF `UserComment`. The result is presented in **three dedicated copyable boxes: Positive Prompt, Negative Prompt, and Generation Settings** (one key per line). Positive and negative pass through your active normalizer (trigger word prefix on the positive only, blacklist/whitelist included); the tags render as inspector-style chips. Images without metadata produce a clear explanatory status instead of a silent failure.
+- **Windows launcher fix**: `start.bat` is now pure ASCII with CRLF line endings. No more `"LORA" no se reconoce como un comando` error (an unescaped `&` in the title line split it into a second command) and no more `ÔÇç` mojibake (UTF-8 em-dash under the cp850 console code page). A regression test keeps the launcher ASCII-safe.
+- **Pre-release audit**: three runtime wiring mismatches fixed before publication — the language-switch handler returned 81 values for 80 outputs (Extract-section labels landed on the wrong boxes), the metadata error path returned 4 values for 6 outputs (a browser-side crash instead of the error status), and the empty personal-tag input returned 2 values for 7 outputs. New `tests/test_ui_wiring_counts.py` (11 runtime wiring tests) invokes the real handlers and verifies return arity plus component-by-component alignment, so this class of regression can never pass again.
+- **i18n**: full EN/ES coverage of all new UI strings.
+- 77 tests, all green; `pip-audit` clean in CI.
 
 ## Release Notes — v1.0.2
 

@@ -5,7 +5,7 @@ Unit Tests for PromptNormalizer: underscores, parentheses, kaomojis, junk wildca
 from __future__ import annotations
 
 from hades_booru.models import CategorizedTags, NormalizerConfig, Post
-from hades_booru.normalizer import PromptNormalizer
+from hades_booru.normalizer import PromptNormalizer, add_tags, parse_tag_list, remove_tags
 
 
 def make_test_normalizer() -> PromptNormalizer:
@@ -102,3 +102,89 @@ def test_exclude_categories_on_raw_only_posts() -> None:
     assert norm.format_post_prompt(raw_only_post, exclude_categories=["meta"]) == "1girl, solo"
     assert norm.format_post_prompt(raw_only_post, exclude_categories=["general"]) == "highres, absurdres"
     assert norm.format_unified_prompt([raw_only_post], exclude_categories=["meta"]) == "1girl, solo"
+
+
+# ---------------------------------------------------------------------------
+# v1.0.3: Personal blacklist / whitelist + list management helpers
+# ---------------------------------------------------------------------------
+
+def test_personal_blacklist_extends_defaults() -> None:
+    norm = PromptNormalizer(
+        NormalizerConfig(
+            filter_junk_tags=True,
+            junk_tags_list=["watermark*"],
+            user_blacklist=["commission", "skeleton"],
+            custom_separator=", ",
+        )
+    )
+    # Default junk still filtered
+    assert norm.sanitize_tag("watermark_sample") is None
+    # Personal blacklist entries filtered (exact match)
+    assert norm.sanitize_tag("commission") is None
+    assert norm.sanitize_tag("skeleton") is None
+    # Unrelated tag survives
+    assert norm.sanitize_tag("1girl") == "1girl"
+
+
+def test_personal_blacklist_wildcard() -> None:
+    norm = PromptNormalizer(
+        NormalizerConfig(
+            filter_junk_tags=True,
+            junk_tags_list=[],
+            user_blacklist=["stuffed_*"],
+            custom_separator=", ",
+        )
+    )
+    assert norm.sanitize_tag("stuffed_animal") is None
+    assert norm.sanitize_tag("stuffed_rabbit") is None
+    # The wildcard prefix is 'stuffed_' — the bare word 'stuffed' is NOT a prefix match
+    assert norm.sanitize_tag("stuffy") == "stuffy"
+
+
+def test_personal_whitelist_overrides_blacklist() -> None:
+    norm = PromptNormalizer(
+        NormalizerConfig(
+            filter_junk_tags=True,
+            junk_tags_list=["commission"],
+            user_blacklist=["skeleton"],
+            user_whitelist=["commission", "skeleton*"],
+            custom_separator=", ",
+        )
+    )
+    # Whitelisted tag is preserved even though it is in the junk list
+    assert norm.sanitize_tag("commission") == "commission"
+    # Whitelist wildcard preserves members of a blacklisted prefix
+    assert norm.sanitize_tag("skeleton_pose") == "skeleton pose"
+    assert norm.sanitize_tag("1girl") == "1girl"
+
+
+def test_personal_lists_respect_filter_junk_toggle() -> None:
+    norm = PromptNormalizer(
+        NormalizerConfig(
+            filter_junk_tags=False,
+            junk_tags_list=["commission"],
+            user_blacklist=["skeleton"],
+            custom_separator=", ",
+        )
+    )
+    # With filtering disabled, nothing is dropped
+    assert norm.sanitize_tag("commission") == "commission"
+    assert norm.sanitize_tag("skeleton") == "skeleton"
+
+
+def test_parse_tag_list_dedup_and_split() -> None:
+    assert parse_tag_list("a, b ,  c , a") == ["a", "b", "c"]
+    assert parse_tag_list("x\ny\nz") == ["x", "y", "z"]
+    assert parse_tag_list("  ") == []
+    assert parse_tag_list("Watermark*, watermark*") == ["Watermark*"]
+
+
+def test_add_and_remove_tags_roundtrip() -> None:
+    base: list[str] = ["a", "b"]
+    new_list, added = add_tags(list(base), ["b", "c", "A"])
+    assert added == ["c"]
+    assert new_list == ["a", "b", "c"]
+
+    reduced, removed = remove_tags(new_list, ["B", "zzz"])
+    assert removed == ["b"]
+    assert reduced == ["a", "c"]

@@ -73,6 +73,52 @@ def is_kaomoji_tag(tag: str) -> bool:
     return lower in KAOMOJI_SET or bool(KAOMOJI_PATTERN.match(lower))
 
 
+def normalize_tag_key(tag: str) -> str:
+    """Canonical comparison key for a tag (lowercase, underscores instead of spaces)."""
+    return tag.strip().lower().replace(" ", "_")
+
+
+def parse_tag_list(text: str) -> list[str]:
+    """Parses a user-entered tag list (comma or newline separated) into clean, deduplicated entries."""
+    result: list[str] = []
+    seen: set[str] = set()
+    for chunk in re.split(r"[\n,]", text or ""):
+        tag = chunk.strip()
+        if not tag:
+            continue
+        key = normalize_tag_key(tag)
+        if key not in seen:
+            seen.add(key)
+            result.append(tag)
+    return result
+
+
+def add_tags(existing: list[str], new_tags: list[str]) -> tuple[list[str], list[str]]:
+    """Appends new tags to an existing list (deduplicated). Returns (new_list, actually_added)."""
+    seen = {normalize_tag_key(x) for x in existing}
+    added: list[str] = []
+    for tag in new_tags:
+        key = normalize_tag_key(tag)
+        if key not in seen:
+            seen.add(key)
+            existing.append(tag)
+            added.append(tag)
+    return existing, added
+
+
+def remove_tags(existing: list[str], to_remove: list[str]) -> tuple[list[str], list[str]]:
+    """Removes tags from a list (deduplicated match). Returns (new_list, actually_removed)."""
+    remove_keys = {normalize_tag_key(x) for x in to_remove}
+    kept: list[str] = []
+    removed: list[str] = []
+    for tag in existing:
+        if normalize_tag_key(tag) in remove_keys:
+            removed.append(tag)
+        else:
+            kept.append(tag)
+    return kept, removed
+
+
 class PromptNormalizer:
     """Deterministic prompt normalizer and semantic tag sorter."""
 
@@ -83,25 +129,38 @@ class PromptNormalizer:
         self.config = new_config
 
     def sanitize_tag(self, raw_tag: str) -> str | None:
-        """Sanitizes a single tag according to active rules. Returns None if filtered as junk."""
+        """Sanitizes a single tag according to active rules. Returns None if filtered as junk.
+
+        v1.0.3: personal whitelist entries always bypass junk filtering;
+        personal blacklist entries extend the default junk list.
+        """
         if not raw_tag:
             return None
         tag = raw_tag.strip()
         if not tag:
             return None
 
-        # 1. Junk / meta tag filtering (supports trailing wildcard '*')
-        if self.config.filter_junk_tags:
-            lower_norm = tag.lower().replace(" ", "_")
-            for junk in self.config.junk_tags_list:
-                junk_norm = junk.strip().lower().replace(" ", "_")
-                if not junk_norm:
-                    continue
-                if junk_norm.endswith("*"):
-                    if lower_norm.startswith(junk_norm[:-1]):
+        # 0. Personal whitelist: always preserved, skips junk filtering entirely
+        lower_norm = tag.lower().replace(" ", "_")
+        for keep in self.config.user_whitelist:
+            keep_norm = keep.strip().lower().replace(" ", "_")
+            if keep_norm and (lower_norm == keep_norm or lower_norm.startswith(keep_norm.rstrip("*"))):
+                break
+        else:
+            # 1. Junk / meta tag filtering (defaults + personal blacklist, trailing wildcard '*' supported)
+            if self.config.filter_junk_tags:
+                effective_junk: Sequence[str] = list(self.config.junk_tags_list)
+                if self.config.user_blacklist:
+                    effective_junk = [*effective_junk, *self.config.user_blacklist]
+                for junk in effective_junk:
+                    junk_norm = junk.strip().lower().replace(" ", "_")
+                    if not junk_norm:
+                        continue
+                    if junk_norm.endswith("*"):
+                        if lower_norm.startswith(junk_norm[:-1]):
+                            return None
+                    elif lower_norm == junk_norm:
                         return None
-                elif lower_norm == junk_norm:
-                    return None
 
         # 2. Preserve kaomojis intact without replacing underscores or escaping facial parens
         if is_kaomoji_tag(tag):

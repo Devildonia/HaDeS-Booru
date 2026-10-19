@@ -41,15 +41,49 @@ def test_i18n_en_es_key_parity() -> None:
     assert t("es", "search_btn") == "Buscar"
 
 
-def test_logo_h_webp_and_version_1_0_2_in_header() -> None:
+def test_i18n_v103_new_feature_keys_present() -> None:
+    """v1.0.3 feature strings (personal lists + Image to Prompt) exist in both languages."""
+    required_v103_keys = [
+        "tab_extract",
+        "tab_personal",
+        "extract_preview_label",
+        "personal_list_heading",
+        "blacklist_add_btn",
+        "whitelist_add_btn",
+        "reset_personal_btn",
+        "blacklist_post_btn",
+        "extract_heading",
+        "extract_btn",
+        "extract_no_meta",
+    ]
+    for key in required_v103_keys:
+        assert key in TRANSLATIONS["en"], f"Missing EN key: {key}"
+        assert key in TRANSLATIONS["es"], f"Missing ES key: {key}"
+
+
+def test_windows_launcher_is_ascii_safe() -> None:
+    """cmd.exe parses .bat with the OEM code page (cp850 on Spanish Windows).
+
+    UTF-8 multi-byte chars render as mojibake (e.g. 'ÔÇç') and an unescaped
+    '&' in a line splits it into extra commands (the 'LORA' error of v1.0.2).
+    Keep start.bat pure ASCII, CRLF, and free of ampersands.
+    """
+    bat = Path(__file__).resolve().parent.parent / "start.bat"
+    data = bat.read_bytes()
+    data.decode("ascii")  # raises UnicodeDecodeError on any non-ASCII byte
+    assert b"\r\n" in data, "start.bat must use CRLF line endings"
+    assert b" & " not in data, "unescaped '&' would be parsed as a command separator"
+
+
+def test_logo_h_webp_and_version_1_0_3_in_header() -> None:
     from hades_booru import __version__
 
-    assert __version__ == "1.0.2"
+    assert __version__ == "1.0.3"
     assert LOGO_DATA_URI.startswith("data:image/webp;base64,")
     header = render_header_html("en")
     assert 'class="hades-logo-img"' in header
     assert "data:image/webp;base64," in header
-    assert "v1.0.2" in header
+    assert "v1.0.3" in header
 
 
 def test_inspector_nav_badge_and_status_pill() -> None:
