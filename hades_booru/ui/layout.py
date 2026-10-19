@@ -1142,20 +1142,32 @@ def create_gradio_app() -> gr.Blocks:
             sep: str,
             trig_word: str,
             excl_cats: list[TagCategory],
-        ) -> tuple[int, str, str, str]:
+        ) -> tuple[int, str, str, str, dict]:
+            # 5th return value: move the gallery selection to the newly selected post.
+            # Gradio 6.30 Gallery exposes a `selected_index` prop (Svelte setter applies it
+            # reactively), and gr.update(selected_index=N) survives the server-side
+            # hasattr filter + delete_none (0 is not None). Click-to-select already works
+            # because the browser sets it locally; this makes programmatic navigation work.
             if not posts:
                 return (
                     0,
                     "",
                     render_inspector_nav_badge_html(0, 0, "", lang=cur_lang),
                     render_post_inspector_html(None, PromptNormalizer(), lang=cur_lang),
+                    gr.update(selected_index=0),
                 )
             next_idx = (cur_idx + direction) % len(posts)
             norm = build_normalizer_from_ui(replace_u, escape_p, filter_j, junk_str, sem_order, sep, persist=False)
             post = posts[next_idx]
             prompt = norm.format_post_prompt(post, exclude_categories=excl_cats, trigger_word=trig_word)
             nav_badge = render_inspector_nav_badge_html(next_idx, len(posts), prompt, lang=cur_lang)
-            return next_idx, prompt, nav_badge, render_post_inspector_html(post, norm, lang=cur_lang)
+            return (
+                next_idx,
+                prompt,
+                nav_badge,
+                render_post_inspector_html(post, norm, lang=cur_lang),
+                gr.update(selected_index=next_idx),
+            )
 
         def generate_download_file_handler(
             posts: list[Post],
@@ -1732,7 +1744,7 @@ def create_gradio_app() -> gr.Blocks:
                 trigger_word_input,
                 exclude_cats_chk,
             ],
-            outputs=[selected_idx_state, selected_prompt_box, nav_badge_box, inspector_html],
+            outputs=[selected_idx_state, selected_prompt_box, nav_badge_box, inspector_html, gallery],
         )
         next_post_btn.click(
             fn=lambda posts, idx, lng, *args: navigate_post_handler(1, posts, idx, lng, *args),
@@ -1744,7 +1756,7 @@ def create_gradio_app() -> gr.Blocks:
                 trigger_word_input,
                 exclude_cats_chk,
             ],
-            outputs=[selected_idx_state, selected_prompt_box, nav_badge_box, inspector_html],
+            outputs=[selected_idx_state, selected_prompt_box, nav_badge_box, inspector_html, gallery],
         )
 
         # Discrete controls (Checkboxes, Dropdowns, Radio): update preview AND persist to disk

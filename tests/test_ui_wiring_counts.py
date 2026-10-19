@@ -21,6 +21,7 @@ from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
 from hades_booru import config as config_module
+from hades_booru.models import CategorizedTags, Post
 from hades_booru.ui.layout import create_gradio_app
 
 SEM_ORDER = "general > character > copyright > artist > meta"
@@ -251,3 +252,68 @@ def test_reset_personal_handler_full_arity(app):
     args = ("en", [], 0, False, False, False, "", SEM_ORDER, ", ", "dataset", "", "", [], False)
     result = entry.fn(*args)
     assert len(result) == len(entry.outputs)
+
+
+# ---------------------------------------------------------------- navigate_post_handler
+
+
+def _make_nav_post(post_id: str) -> Post:
+    return Post(
+        id=post_id,
+        source_id="danbooru",
+        source_name="Danbooru",
+        source_url=f"https://danbooru.donmai.us/posts/{post_id}",
+        tags=CategorizedTags(general=["blue_eyes", "twintails"], character=["hatsune_miku"]),
+    )
+
+
+def _find_navigate_entry(app, direction: int):
+    """Finds the prev/next lambda wrapper whose closure is `navigate_post_handler`.
+
+    The direction int (-1 / 1) is baked into each lambda's co_consts.
+    """
+    for entry in app.fns.values():
+        fn = entry.fn
+        if getattr(fn, "__name__", "") != "<lambda>":
+            continue
+        if direction not in getattr(fn.__code__, "co_consts", ()): 
+            continue
+        for cell in getattr(fn, "__closure__", None) or []:
+            if getattr(cell.cell_contents, "__name__", None) == "navigate_post_handler":
+                return entry
+    raise AssertionError(f"lambda for navigate_post_handler(direction={direction}) not found in app.fns")
+
+
+def _navigate_args(posts: list, idx: int):
+    return (posts, idx, "en", False, False, False, "", SEM_ORDER, ", ", "", [])
+
+
+def test_navigate_empty_posts_keeps_full_arity_and_gallery_output(app):
+    entry = _find_navigate_entry(app, -1)
+    result = entry.fn(*_navigate_args([], 0))
+    # Pre-v1.0.5-fix this returned 4 values for 4 outputs that excluded the gallery:
+    # the prompt changed but the selected image stayed frozen.
+    assert len(result) == len(entry.outputs)
+    assert type(entry.outputs[-1]).__name__ == "Gallery"
+    assert result[-1] == {"__type__": "update", "selected_index": 0}
+
+
+@pytest.mark.parametrize("direction, start_idx, expected_idx", [(-1, 1, 0), (1, 0, 1), (1, 1, 0), (-1, 0, 1)])
+def test_navigate_moves_gallery_selection(app, direction, start_idx, expected_idx):
+    entry = _find_navigate_entry(app, direction)
+    posts = [_make_nav_post("1"), _make_nav_post("2")]
+    result = entry.fn(*_navigate_args(posts, start_idx))
+    assert len(result) == len(entry.outputs)
+    assert type(entry.outputs[-1]).__name__ == "Gallery"
+    next_idx, _prompt, _badge, _inspector, gallery_update = result
+    assert next_idx == expected_idx
+    assert gallery_update == {"__type__": "update", "selected_index": expected_idx}
+
+
+def test_navigate_prompt_follows_selected_post(app):
+    entry = _find_navigate_entry(app, 1)
+    posts = [_make_nav_post("1"), _make_nav_post("2")]
+    _next_idx, prompt, *_rest = entry.fn(*_navigate_args(posts, 0))
+    # Default config keeps underscores (replace_underscores=False); ordering: general > character.
+    assert "hatsune_miku" in prompt
+    assert "blue_eyes, twintails" in prompt

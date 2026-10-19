@@ -1,4 +1,4 @@
-# HaDeS Booru v1.0.4
+# HaDeS Booru v1.0.5
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -91,6 +91,14 @@ pip install -r requirements-dev.txt
 python -m pytest
 python -m ruff check .
 ```
+
+## Release Notes — v1.0.5
+
+**Fixes & naming (follow-up to v1.0.4)**
+
+- **Gallery navigation fix (Next/Previous)**: the Previous/Next buttons in Gallery & Inspector now move the selected image in the gallery, not just the prompt and inspector panels. The fix moves the gallery selection through Gradio 6's `selected_index` prop, so the highlighted thumbnail, the preview modal, and the inspector all stay in sync.
+- **Tab rename**: the "Personal Tag List" tab is now simply called **Blacklist** (ES: **Lista Negra**), matching the terminology already used inside the panel. The panel heading was renamed accordingly in both languages. No behavior change.
+- **New tests**: 6 regression tests for the navigation fix (arity on both return paths, selection index per direction, prompt follows the selected post). 100 tests, all green; `ruff` clean.
 
 ## Release Notes — v1.0.4
 

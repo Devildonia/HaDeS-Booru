@@ -55,7 +55,7 @@ TRANSLATIONS: dict[Language, dict[str, str]] = {
         "tab_gallery": "Gallery & Inspector",
         "tab_export": "Batch Export",
         "tab_extract": "Image to Prompt",
-        "tab_personal": "Personal Tag List",
+        "tab_personal": "Blacklist",
         "tab_settings": "Normalization & API Keys",
         # Tab 1: Gallery & Inspector
         "gallery_label": "Search Results",
@@ -132,7 +132,7 @@ TRANSLATIONS: dict[Language, dict[str, str]] = {
         "junk_tags_label": "Excluded Tags (comma-separated, supports * wildcard)",
         "reset_junk_btn": "Reset Default Excluded Tags",
         # Personal tag lists (v1.0.3)
-        "personal_list_heading": "Personal Tag List (Blacklist / Whitelist)",
+        "personal_list_heading": "Blacklist (Personal Tag Rules)",
         "blacklist_heading": "Blacklist — Always Excluded",
         "whitelist_heading": "Whitelist — Always Kept",
         "personal_subheading": "Blacklist tags you never want, or whitelist tags you always want to keep. Persisted in config.local.json and applied on top of the defaults.",
@@ -226,7 +226,7 @@ TRANSLATIONS: dict[Language, dict[str, str]] = {
         "tab_gallery": "Galería e Inspector",
         "tab_export": "Exportación por Lotes",
         "tab_extract": "Imagen a Prompt",
-        "tab_personal": "Lista Personal de Tags",
+        "tab_personal": "Lista Negra",
         "tab_settings": "Normalización y Credenciales API",
         # Tab 1: Gallery & Inspector
         "gallery_label": "Resultados de Búsqueda",
@@ -303,7 +303,7 @@ TRANSLATIONS: dict[Language, dict[str, str]] = {
         "junk_tags_label": "Tags Excluidos (separados por coma, soporta comodín *)",
         "reset_junk_btn": "Restaurar Lista por Defecto",
         # Listas personales de tags (v1.0.3)
-        "personal_list_heading": "Lista Personal de Tags (Blacklist / Whitelist)",
+        "personal_list_heading": "Lista Negra (Reglas Personales de Tags)",
         "blacklist_heading": "Blacklist — Siempre Excluidos",
         "whitelist_heading": "Whitelist — Siempre Mantidos",
         "personal_subheading": "Bloquea tags que nunca quieres o fuerza a mantener tags que siempre quieres conservar. Se persiste en config.local.json y se aplica encima de los valores por defecto.",
