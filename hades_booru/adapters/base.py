@@ -22,6 +22,12 @@ class BooruAdapter(ABC):
     name: str
     default_domain: str
 
+    # Set by each adapter inside search() when the rating filter was applied
+    # server-side. The UI skips its client-side re-filter when this is True, so
+    # server-normalized ratings (e.g. e621's "s" safe bucket for a "General"
+    # selection) are not wrongly excluded by client-side equality (audit X7).
+    server_rating_applied: bool = False
+
     @property
     def last_warning(self) -> str | None:
         """Thread-local warning populated when pagination stops early with partial results (N3)."""

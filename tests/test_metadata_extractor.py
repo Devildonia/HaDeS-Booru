@@ -215,3 +215,162 @@ def test_invalid_image_raises(tmp_path) -> None:
 def test_missing_file_raises(tmp_path) -> None:
     with pytest.raises(MetadataExtractionError):
         extract_image_metadata(str(tmp_path / "missing.png"))
+
+
+# ---------------------------------------------------------------------------
+# Audit R4 regression tests (X1, X2, X3, X4, X6)
+# ---------------------------------------------------------------------------
+
+
+def test_split_sd_parameters_multiline_a1111_layout() -> None:
+    """X1: A1111 puts 'Steps:' at the start of its own line (no leading comma).
+
+    Pre-fix the comma-anchored candidate regex missed it and 'Steps: 20'
+    leaked into the negative section.
+    """
+    blob = (
+        "1girl, smile\n"
+        "Negative prompt: lowres, bad hands\n"
+        "Steps: 20, Sampler: Euler a, CFG scale: 7, Seed: 1"
+    )
+    positive, negative, settings = split_sd_parameters(blob)
+    assert positive == "1girl, smile"
+    assert negative == "lowres, bad hands"
+    assert "Steps" not in negative
+    assert settings.startswith("Steps: 20")
+    assert "Sampler: Euler a" in settings
+    assert "Seed: 1" in settings
+    lines = format_settings_lines(settings)
+    assert lines.split("\n")[0] == "Steps: 20"
+
+
+def test_split_sd_parameters_settings_without_negative_marker() -> None:
+    """X1b: no 'Negative prompt:' marker but a trailing 'Steps:' settings line."""
+    positive, negative, settings = split_sd_parameters("1girl, smile\nSteps: 20, Sampler: Euler a, Seed: 1")
+    assert positive == "1girl, smile"
+    assert negative == ""
+    assert settings.startswith("Steps: 20")
+
+
+def test_exif_user_comment_unicode_prefix_utf16(tmp_path) -> None:
+    """X2: 'UNICODE' prefixed comments are UTF-16 (A1111 JPEG/WebP output).
+
+    Pre-fix the body was decoded as UTF-8, yielding '\x001\x00g\x00i...' tags.
+    """
+    img = Image.new("RGB", (32, 32), color=(200, 60, 60))
+    exif = img.getexif()
+    exif[0x9286] = b"UNICODE\x00" + "1girl, smile".encode("utf-16-be")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", exif=exif.tobytes())
+    target = tmp_path / "unicode.jpg"
+    _write(target, buf.getvalue())
+
+    meta = extract_image_metadata(str(target))
+    assert meta.found is True
+    assert "1girl" in meta.tags
+    assert "smile" in meta.tags
+    assert all("\x00" not in tag for tag in meta.tags)
+
+
+def test_exif_user_comment_ascii_padding_nuls(tmp_path) -> None:
+    """X2b: 'ASCII' prefixes carry up to 3 padding NULs that must not leak into the text."""
+    img = Image.new("RGB", (32, 32), color=(60, 200, 60))
+    exif = img.getexif()
+    exif[0x9286] = b"ASCII\x00\x00\x00" + b"1boy, school uniform"
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", exif=exif.tobytes())
+    target = tmp_path / "ascii.jpg"
+    _write(target, buf.getvalue())
+
+    meta = extract_image_metadata(str(target))
+    assert "1boy" in meta.tags
+    assert "school uniform" in meta.tags
+    assert all(not tag.startswith("\x00") for tag in meta.tags)
+
+
+def test_png_xmp_dc_subject(tmp_path) -> None:
+    """X3: Pillow stores PNG XMP under 'XML:com.adobe.xmp', not 'XMP'."""
+    xmp = (
+        b'<?xpacket begin="w" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+        b'<x:xmpmeta xmlns:x="adobe:ns:meta/">'
+        b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+        b'<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        b'<dc:subject><rdf:Bag>'
+        b'<rdf:li>1girl</rdf:li><rdf:li>smile</rdf:li>'
+        b'</rdf:Bag></dc:subject>'
+        b'</rdf:Description></rdf:RDF></x:xmpmeta>'
+        b'<?xpacket end="w"?>'
+    )
+    pnginfo = PngInfo()
+    pnginfo.add_text("XML:com.adobe.xmp", xmp)
+    target = tmp_path / "xmp.png"
+    _write(target, _png_bytes(pnginfo))
+
+    meta = extract_image_metadata(str(target))
+    assert meta.found is True
+    assert "1girl" in meta.tags
+    assert "smile" in meta.tags
+    assert any("XMP" in s for s in meta.sources)
+
+
+def test_comfyui_sampler_links_non_consecutive_ids(tmp_path) -> None:
+    """X4: positive/negative must follow the KSampler links, not node id order.
+
+    Pre-fix the ids were sorted lexicographically ('10' < '3' < '5' < '7') and
+    the first text node by that order became the positive prompt.
+    """
+    import json as _json
+
+    graph = {
+        "3": {"class_type": "KSampler", "inputs": {"seed": 1, "positive": [5, 0], "negative": [7, 0]}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"text": "1girl, smile"}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "lowres, bad hands"}},
+        "10": {"class_type": "CLIPTextEncode", "inputs": {"text": "pos2 tag"}},
+    }
+    pnginfo = PngInfo()
+    pnginfo.add_text("prompt", _json.dumps(graph))
+    target = tmp_path / "comfy_links.png"
+    _write(target, _png_bytes(pnginfo))
+
+    meta = extract_image_metadata(str(target))
+    assert meta.prompt == "1girl, smile"
+    assert "lowres, bad hands" in (meta.negative or "")
+    # Unlinked text nodes are preserved in the negative bucket, never lost.
+    assert "pos2 tag" in (meta.negative or "")
+
+
+def test_comfyui_sampler_links_inverted_ids(tmp_path) -> None:
+    """X4b: with the negative node carrying the lower id, sections must not swap."""
+    import json as _json
+
+    graph = {
+        "3": {"class_type": "KSampler", "inputs": {"seed": 1, "positive": [9, 0], "negative": [2, 0]}},
+        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "lowres, bad hands"}},
+        "9": {"class_type": "CLIPTextEncode", "inputs": {"text": "1girl, smile"}},
+    }
+    pnginfo = PngInfo()
+    pnginfo.add_text("prompt", _json.dumps(graph))
+    target = tmp_path / "comfy_inverted.png"
+    _write(target, _png_bytes(pnginfo))
+
+    meta = extract_image_metadata(str(target))
+    assert meta.prompt == "1girl, smile"
+    assert meta.negative == "lowres, bad hands"
+
+
+def test_negative_and_settings_stay_out_of_tags(tmp_path) -> None:
+    """X6: meta.tags feeds the success counter and tag chips; it must only
+    contain positive tags, not negative words or 'Steps: N'."""
+    pnginfo = PngInfo()
+    pnginfo.add_text(
+        "parameters",
+        "1girl, smile\nNegative prompt: lowres, bad hands\nSteps: 20, Sampler: Euler a",
+    )
+    target = tmp_path / "tagscope.png"
+    _write(target, _png_bytes(pnginfo))
+
+    meta = extract_image_metadata(str(target))
+    assert "1girl" in meta.tags
+    assert "lowres" not in meta.tags
+    assert "bad hands" not in meta.tags
+    assert not any("steps" in tag.lower() for tag in meta.tags)

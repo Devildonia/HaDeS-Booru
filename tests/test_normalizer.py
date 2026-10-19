@@ -158,6 +158,27 @@ def test_personal_whitelist_overrides_blacklist() -> None:
     assert norm.sanitize_tag("1girl") == "1girl"
 
 
+def test_whitelist_exact_match_without_wildcard() -> None:
+    """X5: a whitelist entry without '*' must match exactly, not by prefix.
+
+    Pre-fix `startswith(keep_norm.rstrip('*'))` ran unconditionally, so a
+    whitelist of 'solo' silently preserved 'solo_focus' and 'soloist'.
+    """
+    norm = PromptNormalizer(
+        NormalizerConfig(
+            filter_junk_tags=True,
+            junk_tags_list=[],
+            user_blacklist=["solo_focus", "soloist"],
+            user_whitelist=["solo"],
+            custom_separator=", ",
+        )
+    )
+    assert norm.sanitize_tag("solo") == "solo"
+    # Blacklisted look-alikes are NOT preserved by the exact 'solo' whitelist.
+    assert norm.sanitize_tag("solo_focus") is None
+    assert norm.sanitize_tag("soloist") is None
+
+
 def test_personal_lists_respect_filter_junk_toggle() -> None:
     norm = PromptNormalizer(
         NormalizerConfig(

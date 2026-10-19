@@ -131,6 +131,7 @@ class E621Adapter(BooruAdapter):
         rating_tag = SERVER_RATING_TAGS.get(rating or "")
         if rating_tag:
             clean_tags = f"{clean_tags} {rating_tag}".strip()
+        self.server_rating_applied = bool(rating_tag)
 
         posts: list[Post] = []
         seen_ids: set[str] = set()

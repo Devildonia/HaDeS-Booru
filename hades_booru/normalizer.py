@@ -144,7 +144,12 @@ class PromptNormalizer:
         lower_norm = tag.lower().replace(" ", "_")
         for keep in self.config.user_whitelist:
             keep_norm = keep.strip().lower().replace(" ", "_")
-            if keep_norm and (lower_norm == keep_norm or lower_norm.startswith(keep_norm.rstrip("*"))):
+            if not keep_norm:
+                continue
+            if keep_norm.endswith("*"):
+                if lower_norm.startswith(keep_norm[:-1]):
+                    break
+            elif lower_norm == keep_norm:
                 break
         else:
             # 1. Junk / meta tag filtering (defaults + personal blacklist, trailing wildcard '*' supported)

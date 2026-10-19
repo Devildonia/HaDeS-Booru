@@ -285,6 +285,7 @@ class GelbooruAdapter(BooruAdapter):
             dapi_rating_tag = {"s": "rating:s", "q": "rating:q", "e": "rating:e"}.get(rating or "")
             if dapi_rating_tag:
                 params["tags"] = f"{params.get('tags', '')} {dapi_rating_tag}".strip()
+            self.server_rating_applied = bool(dapi_rating_tag)
             self._apply_credentials(params)
 
             try:

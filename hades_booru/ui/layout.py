@@ -838,9 +838,19 @@ def create_gradio_app() -> gr.Blocks:
                         )
                         status_state = "warn"
 
-                # Safety net: adapters without server-side rating support (or unmapped
-                # ratings like "u") are still filtered client-side.
-                if rating_val and rating_val != "all":
+                # Safety net: ratings the adapter could not apply server-side
+                # (unmapped values like "u", or injection skipped for danbooru's
+                # anonymous 2-tag limit) are still filtered client-side. When the
+                # server already applied the filter we must NOT re-filter by
+                # equality: on e621 a "General" selection legitimately returns
+                # posts rated "s" (its safe bucket), which equality would wipe
+                # out to zero results (audit X7).
+                active_adapter = detected.adapter if detected else adapter
+                if (
+                    rating_val
+                    and rating_val != "all"
+                    and not getattr(active_adapter, "server_rating_applied", False)
+                ):
                     results = [p for p in results if p.rating == rating_val]
                     status_note += t(
                         cur_lang,

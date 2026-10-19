@@ -175,6 +175,7 @@ class DanbooruAdapter(BooruAdapter):
             rating_tag and (self.id != "danbooru" or auth is not None or len(user_tokens) <= 1)
         )
         clean_tags = f"{base_tags} {rating_tag}".strip() if can_inject_rating else base_tags
+        self.server_rating_applied = can_inject_rating
 
         posts: list[Post] = []
         seen_ids: set[str] = set()

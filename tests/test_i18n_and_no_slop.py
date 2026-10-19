@@ -75,15 +75,15 @@ def test_windows_launcher_is_ascii_safe() -> None:
     assert b" & " not in data, "unescaped '&' would be parsed as a command separator"
 
 
-def test_logo_h_webp_and_version_1_0_3_in_header() -> None:
+def test_logo_h_webp_and_current_version_in_header() -> None:
     from hades_booru import __version__
 
-    assert __version__ == "1.0.3"
+    # The header must advertise the exact version shipped by the package.
     assert LOGO_DATA_URI.startswith("data:image/webp;base64,")
     header = render_header_html("en")
     assert 'class="hades-logo-img"' in header
     assert "data:image/webp;base64," in header
-    assert "v1.0.3" in header
+    assert f"v{__version__}" in header
 
 
 def test_inspector_nav_badge_and_status_pill() -> None:

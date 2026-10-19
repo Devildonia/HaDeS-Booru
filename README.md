@@ -1,4 +1,4 @@
-# HaDeS Booru v1.0.3
+# HaDeS Booru v1.0.4
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -91,6 +91,20 @@ pip install -r requirements-dev.txt
 python -m pytest
 python -m ruff check .
 ```
+
+## Release Notes — v1.0.4
+
+**External audit (R4) fixes — Image to Prompt correctness + rating filter**
+
+- **A1111 multi-line split (X1)**: `Steps: N` (and the rest of the settings line) no longer leaks into the Negative Prompt box; the settings block is now detected when it starts on its own line, with or without a `Negative prompt:` marker.
+- **EXIF `UNICODE` comments (X2)**: JPEG/WebP comments written by A1111 (UTF-16 with `UNICODE` prefix) decode correctly instead of producing `\x00`-garbled tags; `ASCII` prefix padding NULs no longer leak into the text.
+- **PNG XMP support (X3)**: XMP blobs stored under Pillow's `XML:com.adobe.xmp` key (the PNG location) are now read, and both `<dc:term>` and `<rdf:li>` subject forms are parsed.
+- **ComfyUI prompt graphs (X4)**: positive/negative are resolved by following the sampler node's `positive`/`negative` links instead of node-id order (which was lexicographic), so graphs with non-consecutive or inverted node ids no longer swap or misassign sections; unlinked text nodes are preserved.
+- **Whitelist semantics (X5)**: whitelist entries without `*` now match exactly (previously `solo` also kept `solo_focus`, `soloist`, ...); wildcards work as before.
+- **Tag counter scope (X6)**: the success counter and tag chips only count positive tags — negative words and settings no longer inflate them.
+- **e621 "General" rating (X7)**: adapters now report when the rating filter was applied server-side and the UI skips its client-side re-filter, so a "General" selection on e621 no longer returns zero results (its safe bucket is rated `s`).
+- **New tests**: 16 regression tests covering every fixed case (`tests/test_metadata_extractor.py`, `tests/test_normalizer.py`, new `tests/test_audit_r4_adapters.py`).
+- 94 tests, all green; `ruff` clean.
 
 ## Release Notes — v1.0.3
 

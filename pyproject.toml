@@ -1,6 +1,6 @@
 [project]
 name = "hades-booru"
-version = "1.0.3"
+version = "1.0.4"
 description = "Universal Booru Prompt Harvester, Tag Normalizer & LoRA Dataset Builder (Python + Gradio)"
 readme = "README.md"
 requires-python = ">=3.11"

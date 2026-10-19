@@ -5,8 +5,10 @@ Reads embedded prompt/tags from an image file WITHOUT uploading anything:
 - PNG tEXt chunks:  'comment' (Danbooru/Bilibili/Gelbooru), 'description',
                     'parameters' / 'prompt' (Civitai / Stable Diffusion),
                     'rating', 'source'
-- PNG XMP blob:     <dc:subject>/<dc:term> and prompt-like elements
-- JPEG/WebP EXIF:   UserComment (0x9286)
+- XMP blob:         <dc:subject>/<dc:term> and prompt-like elements
+                    (JPEG/WebP 'XMP' key, PNG 'XML:com.adobe.xmp' key)
+- JPEG/WebP EXIF:   UserComment (0x9286), including 'UNICODE' (UTF-16) prefixed
+                    comments as written by A1111 in JPEG/WebP output
 
 Everything runs in-process with Pillow; no network access is performed.
 """
@@ -26,14 +28,20 @@ from hades_booru.normalizer import parse_tag_list
 SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 SUPPORTED_FORMATS: frozenset[str] = frozenset({"PNG", "JPEG", "WEBP"})
 
-DC_SUBJECT_RE = re.compile(r"<dc:term[^>]*>([^<]+)</dc:term>", re.IGNORECASE)
+# dc:subject appears as xmp-array '<dc:term>' or plain RDF '<rdf:Bag><rdf:li>' depending on the writer.
+DC_SUBJECT_RE = re.compile(r"<(?:dc:term|rdf:li)[^>]*>([^<]+)</(?:dc:term|rdf:li)>", re.IGNORECASE)
 PROMPT_XMP_RE = re.compile(r"<[^>]*(?:prompt|parameters)[^>]*>([^<]+)<", re.IGNORECASE)
 EXIF_USER_COMMENT_TAG = 0x9286
-EXIF_COMMENT_PREFIX_RE = re.compile(rb"^(?:ASCII|UNICODE|JIS|Unicode|ASCII )\x00", re.IGNORECASE)
+# EXIF UserComment prefixes: 'ASCII\0' + 3 padding NULs, 'UNICODE\0' (UTF-16 body), 'JIS\0'.
+EXIF_PREFIX_RE = re.compile(rb"^(?:UNICODE|Unicode|ASCII|JIS)\x00", re.IGNORECASE)
 
 # A1111-style 'parameters' blob: split into positive / negative / settings.
 NEGATIVE_MARKER_RE = re.compile(r"\bNegative\s+prompt\s*:", re.IGNORECASE)
 SETTING_CANDIDATE_RE = re.compile(r",\s*([A-Z][A-Za-z0-9][A-Za-z0-9 _/\-]*?)\s*:\s*\S")
+# A1111/Forge place the settings block on its own line starting with 'Steps:'
+# (there is NO comma before it), so the comma-anchored candidate regex alone
+# would miss it and leak 'Steps: N' into the negative section (audit X1).
+STEPS_LINE_RE = re.compile(r"(?m)^\s*Steps\s*:\s")
 # Common generation-setting keys across A1111, Forge, SD.Next and friends.
 KNOWN_SETTING_KEYS: frozenset[str] = frozenset({
     "steps",
@@ -90,12 +98,15 @@ def _clean_text(value: object) -> str:
     return text.strip()
 
 
-def _extract_comfyui_prompt(blob: str) -> str | None:
-    """Decodes a ComfyUI prompt graph (JSON) into its readable prompt texts.
+def _extract_comfyui_prompt(blob: str) -> tuple[str, str] | None:
+    """Decodes a ComfyUI prompt graph (JSON) into (positive, negative) texts.
 
-    ComfyUI stores the API prompt graph in the 'prompt' tEXt chunk: a dict of
-    nodes whose 'inputs' may contain a 'text' field (CLIPTextEncode nodes).
-    Returns the texts joined in node order, or None if the blob is not a graph.
+    ComfyUI stores the API prompt graph in the 'prompt' tEXt chunk. The correct
+    positive/negative pairing is given by the sampler node's `positive` /
+    `negative` inputs (each `[node_id, slot]`), so we follow those links first.
+    Only when no sampler link exists do we fall back to text-node order (first
+    node = positive, second = negative). Returns None if the blob is not a graph
+    with at least one text node.
     """
     stripped = blob.strip()
     if not (stripped.startswith("{") and stripped.endswith("}")):
@@ -107,27 +118,62 @@ def _extract_comfyui_prompt(blob: str) -> str | None:
     if not isinstance(graph, dict):
         return None
 
-    def _node_key(item: tuple[str, object]) -> tuple[int, str]:
-        key = item[0]
-        try:
-            return (0, str(int(key)))
-        except (TypeError, ValueError):
-            return (1, str(key))
-
-    texts: list[str] = []
-    for _node_id, node in sorted(graph.items(), key=_node_key):
+    texts: dict[str, str] = {}
+    for node_id, node in graph.items():
         if not isinstance(node, dict):
             continue
         inputs = node.get("inputs")
         if isinstance(inputs, dict):
             text = inputs.get("text")
             if isinstance(text, str) and text.strip():
-                texts.append(text.strip())
-    return "\n".join(texts) if texts else None
+                texts[str(node_id).strip()] = text.strip()
+    if not texts:
+        return None
+
+    def _link_target(value: object) -> str | None:
+        if isinstance(value, (list, tuple)) and value:
+            value = value[0]
+        if isinstance(value, (str, int)) and str(value).strip() in texts:
+            return str(value).strip()
+        return None
+
+    pos_id: str | None = None
+    neg_id: str | None = None
+    for node in graph.values():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        pos_id = pos_id or _link_target(inputs.get("positive"))
+        neg_id = neg_id or _link_target(inputs.get("negative"))
+
+    if pos_id is not None or neg_id is not None:
+        positive = texts.get(pos_id, "")
+        negative = texts.get(neg_id, "")
+        # Unlinked text nodes (style presets, etc.) are appended to the negative
+        # bucket so no text is lost.
+        extras = [t for nid, t in texts.items() if nid not in (pos_id, neg_id)]
+        if extras:
+            negative = ", ".join(x for x in [negative, *extras] if x)
+        return positive, negative
+
+    # Fallback: no sampler links found; use text-node order.
+    ordered = list(texts.values())
+    positive = ordered[0]
+    negative = ", ".join(ordered[1:]) if len(ordered) > 1 else ""
+    return positive, negative
 
 
 def _find_settings_start(text: str) -> int | None:
-    """Locates the first generation-setting key (', Key: value') inside a blob."""
+    """Locates the start of the settings block inside a blob.
+
+    Prefers a line starting with 'Steps:' (A1111/Forge layout: settings on their
+    own line, no leading comma); otherwise the first ', Key: value' candidate.
+    """
+    steps_line = STEPS_LINE_RE.search(text)
+    if steps_line is not None:
+        return steps_line.start()
     candidates = list(SETTING_CANDIDATE_RE.finditer(text))
     if not candidates:
         return None
@@ -140,9 +186,11 @@ def split_sd_parameters(blob: str) -> tuple[str, str, str]:
     """Splits an A1111/Forge/SD.Next 'parameters' blob into (positive, negative, settings).
 
     The split is heuristic: the 'Negative prompt:' marker separates positive from
-    the rest, and the first recognized setting key (or first 'Capitalized: value'
-    pair) separates negative from settings. Anything that cannot be separated is
-    kept in the closest preceding section, so no text is ever lost.
+    the rest, and the settings block starts at the 'Steps:' line (or the first
+    recognized ', Key: value' pair). Without a negative marker, a trailing
+    settings block is still separated from the positive prompt. Anything that
+    cannot be separated is kept in the closest preceding section, so no text is
+    ever lost.
     """
     positive = blob
     negative = ""
@@ -157,6 +205,11 @@ def split_sd_parameters(blob: str) -> tuple[str, str, str]:
             settings = rest[start:]
         else:
             negative = rest
+    else:
+        start = _find_settings_start(blob)
+        if start is not None:
+            positive = blob[:start]
+            settings = blob[start:]
     positive = positive.strip().strip(",").strip()
     negative = negative.strip().strip(",").strip()
     settings = settings.strip().strip(",").strip()
@@ -168,6 +221,8 @@ def format_settings_lines(settings: str) -> str:
     text = (settings or "").strip().strip(",").strip()
     if not text:
         return ""
+    # Normalize line breaks to comma separators so one setting per line always holds.
+    text = re.sub(r"\s*\n\s*", ", ", text)
     boundaries = [0] + [m.start() for m in SETTING_CANDIDATE_RE.finditer(text)]
     lines: list[str] = []
     for i, start in enumerate(boundaries):
@@ -179,7 +234,12 @@ def format_settings_lines(settings: str) -> str:
 
 
 def _extract_exif_user_comment(img: Image.Image) -> str:
-    """Best-effort EXIF UserComment extraction (JPEG/WebP)."""
+    """Best-effort EXIF UserComment extraction (JPEG/WebP).
+
+    Handles the EXIF prefixes correctly (audit X2): 'UNICODE' bodies are
+    UTF-16 (A1111 writes JPEG/WebP comments this way), 'ASCII' bodies carry up
+    to 3 padding NULs after the prefix that must not leak into the text.
+    """
     try:
         exif = img.getexif()
         if not exif:
@@ -187,9 +247,22 @@ def _extract_exif_user_comment(img: Image.Image) -> str:
         raw = exif.get(EXIF_USER_COMMENT_TAG)
         if raw is None:
             return ""
-        if isinstance(raw, bytes):
-            raw = EXIF_COMMENT_PREFIX_RE.sub(b"", raw, count=1)
-            return raw.decode("utf-8", errors="replace").strip()
+        if isinstance(raw, (bytes, bytearray)):
+            body = bytes(raw)
+            m = EXIF_PREFIX_RE.match(body)
+            if m:
+                is_unicode = m.group(0)[:1].upper() == b"U"
+                body = body[m.end():]
+                if not is_unicode:
+                    body = body.lstrip(b"\x00")
+            if body.startswith(b"\xff\xfe"):
+                return body[2:].decode("utf-16-le", errors="replace").strip()
+            if body.startswith(b"\xfe\xff"):
+                return body[2:].decode("utf-16-be", errors="replace").strip()
+            if body and body[0] == 0 and len(body) % 2 == 0:
+                # Leading NUL with even length: UTF-16BE without BOM (UNICODE prefix).
+                return body.decode("utf-16-be", errors="replace").strip()
+            return body.decode("utf-8", errors="replace").strip()
         return _clean_text(raw)
     except Exception:
         return ""
@@ -232,7 +305,9 @@ def extract_image_metadata(file_path: str) -> ExtractedImageMeta:
             fmt = img.format.upper()
             info = dict(img.info)
             exif_comment = _extract_exif_user_comment(img)
-            xmp_blob = info.get("XMP")
+            # Pillow stores XMP under 'XMP' for JPEG/WebP but under
+            # 'XML:com.adobe.xmp' for PNG (audit X3).
+            xmp_blob = info.get("XMP") or info.get("XML:com.adobe.xmp")
     except UnidentifiedImageError as err:
         raise MetadataExtractionError(f"Not a valid image: {err}") from err
 
@@ -256,16 +331,17 @@ def extract_image_metadata(file_path: str) -> ExtractedImageMeta:
     # and generation settings included): users may want any of those sections.
     parameters = _clean_text(info.get("parameters")) or _clean_text(info.get("prompt"))
     if parameters:
-        comfy_prompt = _extract_comfyui_prompt(parameters)
-        if comfy_prompt:
-            # ComfyUI graph: first text node = positive, remaining = negative.
-            texts = [line.strip() for line in comfy_prompt.split("\n") if line.strip()]
-            meta.prompt = texts[0]
-            if len(texts) > 1:
-                meta.negative = ", ".join(texts[1:])
-            added = _merge_tags(meta.tags, meta.prompt)
-            added = _merge_tags(meta.tags, meta.negative or "") or added
-            if added:
+        comfy = _extract_comfyui_prompt(parameters)
+        if comfy:
+            # ComfyUI graph: positive/negative resolved via sampler links.
+            positive, negative = comfy
+            meta.prompt = positive
+            if negative:
+                meta.negative = negative
+            # Only positive tags feed the tag list: negative words and settings
+            # are shown in their own boxes (audit X6).
+            added = _merge_tags(meta.tags, positive)
+            if added or negative:
                 meta.sources.append("PNG tEXt 'prompt' (ComfyUI graph)")
                 found_anything = True
         else:
@@ -276,8 +352,7 @@ def extract_image_metadata(file_path: str) -> ExtractedImageMeta:
             meta.negative = negative or None
             meta.settings = settings or None
             added = _merge_tags(meta.tags, positive)
-            added = _merge_tags(meta.tags, negative) or added
-            if added:
+            if added or negative:
                 meta.sources.append("PNG tEXt 'parameters'/'prompt'")
                 found_anything = True
 
@@ -309,9 +384,14 @@ def extract_image_metadata(file_path: str) -> ExtractedImageMeta:
 
     # --- 3. EXIF UserComment (JPEG/WebP) ------------------------------------
     if exif_comment:
-        if "negative prompt" in exif_comment.lower():
-            meta.prompt = exif_comment
-        if _merge_tags(meta.tags, exif_comment):
+        positive, negative, settings = split_sd_parameters(exif_comment)
+        meta.prompt = positive or exif_comment
+        if negative:
+            meta.negative = negative
+        if settings:
+            meta.settings = settings
+        added = _merge_tags(meta.tags, meta.prompt or "")
+        if added or negative:
             meta.sources.append("EXIF UserComment")
             found_anything = True
 
