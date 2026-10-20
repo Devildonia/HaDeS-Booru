@@ -22,7 +22,13 @@ from PIL.PngImagePlugin import PngInfo
 
 from hades_booru import config as config_module
 from hades_booru.models import CategorizedTags, Post
-from hades_booru.ui.layout import create_gradio_app
+from hades_booru.ui.layout import (
+    MAX_SEARCH_HISTORY,
+    add_top_tag_to_query,
+    compute_top_tags,
+    create_gradio_app,
+    record_search_history,
+)
 
 SEM_ORDER = "general > character > copyright > artist > meta"
 
@@ -317,3 +323,155 @@ def test_navigate_prompt_follows_selected_post(app):
     # Default config keeps underscores (replace_underscores=False); ordering: general > character.
     assert "hatsune_miku" in prompt
     assert "blue_eyes, twintails" in prompt
+
+
+# ---------------------------------------------------------------- v1.0.6: search history
+
+def test_record_search_history_dedup_and_most_recent_first(app):
+    cm = config_module.config_manager
+    cm.config.search_history = []
+    assert record_search_history("hatsune_miku 1girl") == ["hatsune_miku 1girl"]
+    r = record_search_history("new_query")
+    assert r[0] == "new_query" and "hatsune_miku 1girl" in r
+    # Re-adding an existing query moves it to the front without duplicating.
+    r = record_search_history("hatsune_miku 1girl")
+    assert r[0] == "hatsune_miku 1girl"
+    assert r.count("hatsune_miku 1girl") == 1
+
+
+def test_record_search_history_respects_cap(app):
+    cm = config_module.config_manager
+    cm.config.search_history = []
+    for i in range(MAX_SEARCH_HISTORY + 5):
+        record_search_history(f"query_{i}")
+    h = cm.config.search_history
+    assert len(h) == MAX_SEARCH_HISTORY
+    assert h[0] == f"query_{MAX_SEARCH_HISTORY + 4}"  # most recent survives, oldest dropped
+
+
+def test_record_search_history_ignores_blank_and_persists(app):
+    cm = config_module.config_manager
+    cm.config.search_history = ["kept"]
+    assert record_search_history("   ") == ["kept"]
+    assert cm.config.search_history == ["kept"]
+    assert record_search_history("fresh") == ["fresh", "kept"]
+
+
+def test_execute_search_wires_recent_and_top_tags_outputs(app):
+    entry = _find_entry(app, "execute_search_handler")
+    # v1.0.6 added the recent-searches dropdown and the top-tags dropdown as the final
+    # two wired outputs (both Dropdowns, in that order).
+    assert len(entry.outputs) == 13
+    assert type(entry.outputs[-2]).__name__ == "Dropdown"
+    assert type(entry.outputs[-1]).__name__ == "Dropdown"
+
+
+def test_recent_dropdown_populates_search_bar_and_clear_is_inert(app):
+    """v1.0.6 (revised): selecting a recent search fills the Search-tags bar (no auto-run);
+    Clear (dropdown -> None) maps to gr.skip() so it neither wipes the bar nor runs a search."""
+    entry = _find_entry(app, "populate_query_from_recent")
+    assert entry.fn("hatsune miku 1girl") == "hatsune miku 1girl"  # real selection -> text
+    assert entry.fn(None) == gr.skip()  # Clear / empty -> no change, no search
+    assert entry.fn("") == gr.skip()
+    assert len(entry.inputs) == 1 and len(entry.outputs) == 1
+    assert type(entry.inputs[0]).__name__ == "Dropdown"
+    assert type(entry.outputs[0]).__name__ == "Textbox"
+
+
+def test_clear_search_history_handler_resets_both_lists(app):
+    entry = _find_entry(app, "clear_search_history_handler")
+    config_module.config_manager.config.search_history = ["a b", "b c", "c d"]
+    result = entry.fn()
+    # Two updates: recent-searches dropdown + top-tags dropdown, both cleared.
+    assert len(result) == 2
+    assert result[0]["choices"] == []
+    assert result[0]["value"] is None
+    assert result[1]["choices"] == []
+    # Audit v1.0.6: the top-tags picker must also reset its selection, never stale.
+    assert result[1]["value"] is None
+    assert config_module.config_manager.config.search_history == []
+
+
+def test_recent_dropdown_is_selection_only(app):
+    """Audit v1.0.6: the recent-searches dropdown is a strict picker over recorded
+    history (no free-text typing); free text belongs in the Search-tags bar.
+    The dropdown object is the input of populate_query_from_recent."""
+    entry = _find_entry(app, "populate_query_from_recent")
+    dropdown = entry.inputs[0]
+    assert type(dropdown).__name__ == "Dropdown"
+    assert dropdown.allow_custom_value is False
+
+
+def test_compute_top_tags_ranks_by_frequency_then_recency(app):
+    cm = config_module.config_manager
+    cm.config.search_history = [
+        "miku 1girl blue_eyes",
+        "1girl solo",
+        "1girl",
+        "miku",
+    ]
+    tags = compute_top_tags(cm.config.search_history)
+    assert tags[0] == "1girl"  # appears 3 times -> top
+    assert "miku" in tags  # appears 2 times
+    assert len(tags) <= 8
+
+
+def test_compute_top_tags_empty_and_capped(app):
+    assert compute_top_tags([]) == []
+    assert compute_top_tags(None) == []
+    cm = config_module.config_manager
+    cm.config.search_history = [f"tag_{i} unique_{i}" for i in range(30)]
+    # 30 queries x 2 unique tags = 60 distinct tags, capped to 8.
+    assert len(compute_top_tags(cm.config.search_history)) == 8
+
+
+def test_add_top_tag_appends_and_dedups(app):
+    fn = add_top_tag_to_query
+    q, _reset = fn("miku", "1girl")
+    assert q == "miku, 1girl"
+    q2, _ = fn("miku, 1girl", "1girl")  # dedup (case-insensitive)
+    assert q2 == "miku, 1girl"
+    q3, _ = fn("", "solo")
+    assert q3 == "solo"
+    q4, _ = fn("miku", None)  # empty selection -> query unchanged
+    assert q4 == "miku"
+
+
+def test_on_language_change_relabels_v106_components(app):
+    entry = _find_entry(app, "on_language_change")
+    result = entry.fn(
+        "en", [], 0, "all", "high", "dataset", [],
+        False, False, False, "", SEM_ORDER, ", ", "", "", False,
+    )
+    assert len(result) == len(entry.outputs)
+    # Robust to ordering: assert every v1.0.6 control is relabeled on language switch.
+    observed = set()
+    for comp, upd in zip(entry.outputs, result, strict=True):
+        if isinstance(upd, dict) and upd.get("__type__") == "update":
+            for field in ("label", "value"):
+                val = upd.get(field)
+                if isinstance(val, str):
+                    observed.add((type(comp).__name__, field, val))
+    expected = {
+        ("Dropdown", "label", "Recent searches"),
+        ("Button", "value", "Clear"),
+        ("Button", "value", "Clear Image"),
+        ("Dropdown", "label", "Top tags"),
+        ("Button", "value", "Add"),
+    }
+    missing = expected - observed
+    assert not missing, f"v1.0.6 relabels missing on language switch: {missing}"
+
+
+# ---------------------------------------------------------------- v1.0.6: drop-to-replace
+
+def test_extract_handler_drop_to_replace_picks_latest(app, tmp_path):
+    old = _make_png(tmp_path / "old.png")  # no metadata -> would warn if chosen
+    new = _make_png(tmp_path / "new.png", parameters="masterpiece, 1girl, solo")
+    entry = _find_entry(app, "extract_handler")
+    # A list of [old, new] must analyze the LATEST file (drop-to-replace).
+    status, _info, positive, _negative, _settings, _tags = entry.fn(
+        *_extract_args([str(old), str(new)])
+    )
+    assert "Extracted" in status
+    assert positive == "masterpiece, 1girl, solo"

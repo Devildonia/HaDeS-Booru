@@ -61,6 +61,79 @@ def build_gallery_items(posts: list[Post], quality: ImageQuality) -> list[tuple[
     return image_cache.build_gallery_items(posts, quality)
 
 
+MAX_SEARCH_HISTORY = 12
+
+
+def record_search_history(query: str, limit: int = MAX_SEARCH_HISTORY) -> list[str]:
+    """v1.0.6: prepend a search to the persisted history (dedup, most-recent-first).
+
+    Empty/whitespace queries are ignored. Case-insensitive dedup keeps the newest
+    position. The list is capped so the dropdown never grows unbounded.
+    """
+    q = (query or "").strip()
+    current = [str(x).strip() for x in (config_manager.config.search_history or []) if str(x).strip()]
+    if not q:
+        return current[:limit]
+    deduped = [h for h in current if h.lower() != q.lower()]
+    deduped.insert(0, q)
+    new_history = deduped[:limit]
+    config_manager.config.search_history = new_history
+    config_manager.save()
+    return new_history
+
+
+def populate_query_from_recent(value):
+    """v1.0.6 (revised): fill the Search-tags bar from a recent-search selection.
+
+    A real selection returns the query text to drop into the search bar. An empty / None
+    value (e.g. the Clear button resetting the dropdown to None) returns gr.skip(), so the
+    search bar is left untouched and — crucially — no search is executed on Clear.
+    """
+    return value if value else gr.skip()
+
+
+def compute_top_tags(history, limit: int = 8) -> list[str]:
+    """v1.0.6 (top tags): derive the most-reused individual tags from search history.
+
+    Splits each stored query into tags, counts frequency (case-insensitive), and ranks by
+    count desc then most-recent occurrence. Returns the top `limit` tags in their original
+    (most-recent) casing. Pure derivation from existing history — no new persisted state.
+    """
+    import re
+
+    counts: dict[str, int] = {}
+    display: dict[str, str] = {}
+    first_seen: dict[str, int] = {}
+    for idx, query in enumerate(history or []):
+        for tag in re.split(r"[,\s]+", str(query or "")):
+            tag = tag.strip()
+            if not tag or "://" in tag or len(tag) > 40:
+                continue
+            key = tag.lower()
+            counts[key] = counts.get(key, 0) + 1
+            if key not in display:
+                display[key] = tag
+                first_seen[key] = idx
+    ranked = sorted(counts, key=lambda k: (-counts[k], first_seen[k]))
+    return [display[k] for k in ranked[:limit]]
+
+
+def add_top_tag_to_query(current_query, selected_tag) -> tuple[str, Any]:
+    """v1.0.6 (top tags): append a chosen tag to the search bar (dedup, no auto-run).
+
+    Returns the updated query plus a reset update for the picker so it is ready for the
+    next tag. An empty selection leaves the query unchanged.
+    """
+    q = (current_query or "").strip()
+    tag = (selected_tag or "").strip()
+    if tag:
+        tags = [x.strip() for x in q.replace("\n", ",").split(",") if x.strip()]
+        if not any(x.lower() == tag.lower() for x in tags):
+            tags.append(tag)
+        q = ", ".join(tags)
+    return q, gr.update(value=None)
+
+
 def build_normalizer_from_ui(
     replace_underscores: bool,
     escape_parens: bool,
@@ -198,6 +271,37 @@ def create_gradio_app() -> gr.Blocks:
                     scale=2,
                     elem_classes=["hades-search-btn"],
                 )
+
+            # v1.0.6: recent searches (left half) + top tags (right half), side by side.
+            # - Recent searches: persisted, most-recent-first; selecting one fills the
+            #   Search-tags bar (no auto-run); "Clear" wipes the stored history.
+            # - Top tags: the most-reused individual tags derived from that history;
+            #   "Add" appends the picked tag to the Search-tags bar (dedup, no auto-run).
+            with gr.Row(equal_height=True):
+                with gr.Row(scale=1, variant="panel", elem_classes=["hades-command-row"]):
+                    recent_dropdown = gr.Dropdown(
+                        choices=list(config_manager.config.search_history or []),
+                        value=None,
+                        label=t(lang, "recent_label"),
+                        # Selection-only: free text belongs in the Search-tags bar above;
+                        # the dropdown is a strict picker over recorded history (audit v1.0.6).
+                        allow_custom_value=False,
+                        scale=5,
+                    )
+                    clear_history_btn = gr.Button(
+                        t(lang, "clear_history_btn"), scale=1, size="sm"
+                    )
+                with gr.Row(scale=1, variant="panel", elem_classes=["hades-command-row"]):
+                    top_tags_dropdown = gr.Dropdown(
+                        choices=compute_top_tags(config_manager.config.search_history),
+                        value=None,
+                        label=t(lang, "top_tags_label"),
+                        allow_custom_value=False,
+                        scale=5,
+                    )
+                    top_tags_add_btn = gr.Button(
+                        t(lang, "top_tags_add_btn"), scale=1, size="sm"
+                    )
 
             with gr.Row(variant="panel", elem_classes=["hades-command-row"]):
                 limit_dropdown = gr.Dropdown(
@@ -399,9 +503,13 @@ def create_gradio_app() -> gr.Blocks:
                     render_section_header_html(t(lang, "extract_heading"))
                 )
                 extract_sub_md = gr.Markdown(t(lang, "extract_subheading"))
+                # v1.0.6: file_count="multiple" keeps the drop zone visible after a file
+                # is loaded (Gradio hides it in "single" mode once populated), so a new
+                # image can be dragged in to replace the current one. The handlers below
+                # always analyze the LATEST file (last in the list).
                 extract_file_input = gr.File(
                     label=t(lang, "extract_file_label"),
-                    file_count="single",
+                    file_count="multiple",
                     file_types=[".png", ".jpg", ".jpeg", ".webp"],
                 )
                 extract_preview = gr.Image(
@@ -411,6 +519,7 @@ def create_gradio_app() -> gr.Blocks:
                     height=320,
                 )
                 extract_btn = gr.Button(t(lang, "extract_btn"), variant="primary")
+                extract_clear_btn = gr.Button(t(lang, "extract_clear_btn"), size="sm")
                 extract_status_box = gr.HTML(value="")
                 extract_info_md = gr.Markdown("")
                 extract_positive_box = gr.Textbox(
@@ -889,6 +998,10 @@ def create_gradio_app() -> gr.Blocks:
                     persist=True,
                 )
 
+                # v1.0.6: record the executed query in history (success path only — failed
+                # searches are not pinned to the dropdown). Returns the updated choices
+                # plus a refreshed top-tags list (derived from the same history).
+                new_history = record_search_history(trimmed_q)
                 return (
                     results,
                     0,
@@ -901,6 +1014,9 @@ def create_gradio_app() -> gr.Blocks:
                     export_text,
                     stats_html,
                     render_status_pill_html(status_note, lang=cur_lang, state=status_state),
+                    gr.update(choices=new_history, value=trimmed_q or None),
+                    # Reset the picker: never leave a stale selection after a refresh.
+                    gr.update(choices=compute_top_tags(new_history), value=None),
                 )
 
             except Exception as err:
@@ -922,6 +1038,8 @@ def create_gradio_app() -> gr.Blocks:
                     inc_header,
                     persist=False,
                 )
+                # v1.0.6: failed searches do NOT change history; keep the current choices
+                # and the current top-tags list (both derived from unchanged history).
                 return (
                     [],
                     0,
@@ -934,7 +1052,25 @@ def create_gradio_app() -> gr.Blocks:
                     export_text,
                     stats_html,
                     render_status_pill_html(err_msg, lang=cur_lang, state="error"),
+                    gr.update(
+                        choices=list(config_manager.config.search_history or []),
+                        value=None,
+                    ),
+                    gr.update(
+                        choices=compute_top_tags(config_manager.config.search_history),
+                        value=None,
+                    ),
                 )
+
+        def clear_search_history_handler() -> list:
+            """v1.0.6: wipe the persisted search history and reset both the recent-searches
+            dropdown and the derived top-tags list (both come from the same history)."""
+            config_manager.config.search_history = []
+            config_manager.save()
+            return [
+                gr.update(choices=[], value=None),
+                gr.update(choices=[], value=None),
+            ]
 
         def on_quality_change(
             quality_val: ImageQuality,
@@ -1103,6 +1239,14 @@ def create_gradio_app() -> gr.Blocks:
                 gr.update(label=t(effective_lang, "extract_negative_label")),
                 gr.update(label=t(effective_lang, "extract_settings_label")),
                 "",
+                # v1.0.6: recent-searches row + Image to Prompt clear button + top tags
+                # (appended last so the existing 0..N output indices stay stable for the
+                # wiring tests).
+                gr.update(label=t(effective_lang, "recent_label")),
+                gr.update(value=t(effective_lang, "clear_history_btn")),
+                gr.update(value=t(effective_lang, "extract_clear_btn")),
+                gr.update(label=t(effective_lang, "top_tags_label")),
+                gr.update(value=t(effective_lang, "top_tags_add_btn")),
             )
 
         def on_gallery_select(
@@ -1515,7 +1659,9 @@ def create_gradio_app() -> gr.Blocks:
         ) -> tuple[Any, ...]:
             path: str | None = None
             if isinstance(file_val, (list, tuple)):
-                file_val = file_val[0] if file_val else None
+                # v1.0.6: the LATEST dropped file wins (drop-to-replace). New files are
+                # appended to the end, so [-1] is the most recent image the user loaded.
+                file_val = file_val[-1] if file_val else None
             if file_val is not None:
                 path = file_val if isinstance(file_val, str) else getattr(file_val, "name", None)
 
@@ -1586,6 +1732,8 @@ def create_gradio_app() -> gr.Blocks:
             export_preview_box,
             export_stats_box,
             status_banner,
+            recent_dropdown,  # v1.0.6: refresh history choices after each search
+            top_tags_dropdown,  # v1.0.6: refresh top tags after each search
         ]
         search_btn.click(
             fn=execute_search_handler,
@@ -1614,6 +1762,25 @@ def create_gradio_app() -> gr.Blocks:
                 *export_inputs,
             ],
             outputs=search_outputs,
+        )
+
+        # v1.0.6 (revised): selecting a recent search just fills the Search-tags bar — no
+        # auto-run; the user presses Search / Enter when ready. Clear resets the dropdown
+        # to None, which maps to gr.skip() (via populate_query_from_recent), so it can no
+        # longer trigger a spurious search or wipe the search bar.
+        recent_dropdown.change(
+            fn=populate_query_from_recent,
+            inputs=[recent_dropdown],
+            outputs=[query_input],
+        )
+        clear_history_btn.click(
+            fn=clear_search_history_handler,
+            outputs=[recent_dropdown, top_tags_dropdown],
+        )
+        top_tags_add_btn.click(
+            fn=add_top_tag_to_query,
+            inputs=[query_input, top_tags_dropdown],
+            outputs=[query_input, top_tags_dropdown],
         )
 
         quality_dropdown.change(
@@ -1725,6 +1892,12 @@ def create_gradio_app() -> gr.Blocks:
                 extract_negative_box,
                 extract_settings_box,
                 extract_tags_html,
+                # v1.0.6: appended last to keep 0..N indices stable for the wiring tests
+                recent_dropdown,
+                clear_history_btn,
+                extract_clear_btn,
+                top_tags_dropdown,
+                top_tags_add_btn,
             ],
         )
 
@@ -1878,9 +2051,12 @@ def create_gradio_app() -> gr.Blocks:
             extract_tags_html,
         ]
         extract_file_input.change(
-            fn=lambda f: f
-            if isinstance(f, str)
-            else (f[0] if isinstance(f, (list, tuple)) and f else None),
+            # v1.0.6: preview the LATEST file (drop-to-replace keeps the newest at [-1]).
+            fn=lambda f: (
+                f
+                if isinstance(f, str)
+                else (f[-1] if isinstance(f, (list, tuple)) and f else None)
+            ),
             inputs=[extract_file_input],
             outputs=[extract_preview],
         ).then(
@@ -1894,6 +2070,22 @@ def create_gradio_app() -> gr.Blocks:
             fn=extract_handler,
             inputs=[extract_file_input, lang_dropdown, trigger_word_input, *norm_inputs],
             outputs=extract_view_outputs,
+        )
+
+        # v1.0.6: clear the loaded image, the preview, and all extracted results at once,
+        # so the user can immediately drag in a different image.
+        extract_clear_btn.click(
+            fn=lambda: (None, None, "", "", "", "", "", ""),
+            outputs=[
+                extract_file_input,
+                extract_preview,
+                extract_status_box,
+                extract_info_md,
+                extract_positive_box,
+                extract_negative_box,
+                extract_settings_box,
+                extract_tags_html,
+            ],
         )
 
         # Export & Local Folder actions

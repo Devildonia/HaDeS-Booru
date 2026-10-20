@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
+import logging
 import re
 import threading
 from pathlib import Path
@@ -19,6 +20,8 @@ from hades_booru.models import ImageQuality, Post
 
 DEFAULT_CACHE_DIR = Path(".cache/gallery")
 BROWSER_SAFE_EXTS: frozenset[str] = frozenset({".jpg", ".png", ".webp", ".gif", ".avif"})
+
+logger = logging.getLogger(__name__)
 
 
 class DiskImageCache:
@@ -84,7 +87,16 @@ class DiskImageCache:
                 with self._lock:
                     target.write_bytes(raw_bytes)
                 return str(target.resolve()), caption
-            except Exception:
+            except Exception as err:
+                # Never crash the gallery over one bad image: log for diagnostics and
+                # fall through to the next fallback URL / placeholder card.
+                logger.debug(
+                    "Failed to download gallery image for post %s (%s) from %s",
+                    post.id,
+                    post.source_name,
+                    candidate_url,
+                    exc_info=err,
+                )
                 continue
 
         err_card = self._write_placeholder(post, f"{key}_err", color_hex="#ef4444")

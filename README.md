@@ -1,4 +1,4 @@
-# HaDeS Booru v1.0.5
+# HaDeS Booru v1.0.6
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -38,7 +38,7 @@ Multi-source tag extractor, semantic prompt normalizer, and dataset utility buil
 
 ```text
 HaDeS-Booru/
-├── app.py                        # Entry point (http://127.0.0.1:7860)
+├── app.py                        # Entry point (http://127.0.0.1:7863)
 ├── start.bat                     # Windows launcher script
 ├── start.sh                      # Linux / macOS launcher script
 ├── requirements.txt              # Runtime dependencies (range pins)
@@ -81,7 +81,9 @@ pip install -r requirements.lock
 ```bash
 python app.py
 ```
-The web interface listens on `http://127.0.0.1:7860` (local only by default).
+The web interface listens on `http://127.0.0.1:7863` (local only by default).
+
+> **Port note**: the default port is `7863`, chosen to avoid clashing with Stable Diffusion WebUI / Forge (`7860` / `7861`) and ComfyUI (`8188`). If that port is already in use, the app automatically probes the next sequential ports and binds the first free one, so the UI always comes up. The actually-chosen URL is printed to the console on launch.
 
 > **Security note**: `python app.py --share` exposes the interface through a public Gradio tunnel. Avoid this flag if you have loaded personal API credentials.
 
@@ -91,6 +93,22 @@ pip install -r requirements-dev.txt
 python -m pytest
 python -m ruff check .
 ```
+
+## Release Notes — v1.0.6
+
+**Quality of life**
+
+- **Recent searches + Top tags (side by side)**: the search area now keeps your last 12 queries (deduplicated, most-recent-first) in a **Recent searches** dropdown — pick one to drop it straight into the Search-tags bar (press Search / Enter to run it), or **Clear** to wipe the stored history without touching the search bar. Beside it, a **Top tags** picker lists your most-reused individual tags (derived from the same history); **Add** appends one to the Search-tags bar (deduplicated, no auto-run) so you can build tag queries faster. History is persisted in `config.local.json` and only successful searches are recorded — failed queries are not pinned.
+- **Sensible default port + auto-fallback**: the default port moved from `7860` to `7863` so it no longer collides with Stable Diffusion WebUI / Forge (`7860` / `7861`) or ComfyUI (`8188`). If the requested port is busy, the launcher probes the next ports (up to 50 tries) and binds the first free one, then prints the chosen URL — the app always launches. `--port` is still honored for an explicit override.
+- **Drop-to-replace in Image to Prompt**: you can now drag a new image into the Extract tab even when one is already loaded — the drop zone stays visible and the newest file wins. A new **Clear Image** button resets the file, preview, and all extracted sections at once.
+- **New tests**: regression coverage for search-history recording (dedup / cap / empty / ignore-on-failure), the recent-searches dropdown wiring and clear handler, top-tags ranking / cap / append-dedup, the extract drop-to-replace `[-1]` selection, and the language-switch relabels for all new controls. `ruff` clean.
+
+**Pre-release audit hardening** (final full-project audit, all findings closed before push)
+
+- Gallery image download failures are now logged at debug level (post id + URL) instead of being swallowed silently — the placeholder-card fallback behavior is unchanged.
+- The port probe is now race-safe in practice: if the OS still refuses the bind (port snatched between probe and launch), the launcher prints a clear, actionable error and exits cleanly instead of dumping a low-level traceback.
+- The Top-tags picker always resets its selection after a search or a Clear, so it can never hold a stale tag that dropped out of the refreshed list.
+- The Recent searches dropdown is now selection-only (no free-text typing) — free text belongs in the Search-tags bar; the dropdown strictly picks from recorded history.
 
 ## Release Notes — v1.0.5
 

@@ -239,6 +239,8 @@ class AppConfig(BaseModel):
     image_quality: ImageQuality = "high"
     language: Language = "en"
     data_saver_mode: bool = False
+    # v1.0.6: most-recent-first search history (dedup, capped in the UI layer).
+    search_history: list[str] = Field(default_factory=list)
 
 
 class BooruSourceSpec(BaseModel):
