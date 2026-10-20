@@ -187,6 +187,10 @@ python -m ruff check .
 - Moebooru posts rated `g` are no longer mis-mapped to "unrated".
 - `gradio` is pinned to the `6.x` major line.
 
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for deferred work and the planned v1.1.0 cycle (Tag Dictionary, per-session personal lists, DAPI tag categorization).
+
 ## License
 
 Distributed under the [MIT License](LICENSE).
