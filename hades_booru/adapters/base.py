@@ -7,12 +7,37 @@ from __future__ import annotations
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from typing import Any
 
 from hades_booru.models import Post
 
 ProgressCallback = Callable[[float, str], None]
 
 _ADAPTER_TLS = threading.local()
+
+
+def _tls_get(obj: object, store_name: str, default: Any = None) -> Any:
+    """Reads a thread-local value for `obj`.
+
+    Entries store a strong reference to the object itself (audit Y2 hardening):
+    while an entry exists the original object stays alive, so its `id()` can never
+    be reused by a different object — and the identity check (`is`) rejects any
+    stale entry anyway. This closes the id-reuse hazard of plain id-keyed maps.
+    """
+    store: dict[int, tuple[object, Any]] | None = getattr(_ADAPTER_TLS, store_name, None)
+    if store is None:
+        return default
+    entry = store.get(id(obj))
+    if entry is not None and entry[0] is obj:
+        return entry[1]
+    return default
+
+
+def _tls_set(obj: object, store_name: str, value: Any) -> None:
+    if not hasattr(_ADAPTER_TLS, store_name):
+        setattr(_ADAPTER_TLS, store_name, {})
+    store: dict[int, tuple[object, Any]] = getattr(_ADAPTER_TLS, store_name)
+    store[id(obj)] = (obj, value)
 
 
 class BooruAdapter(ABC):
@@ -22,23 +47,31 @@ class BooruAdapter(ABC):
     name: str
     default_domain: str
 
-    # Set by each adapter inside search() when the rating filter was applied
-    # server-side. The UI skips its client-side re-filter when this is True, so
-    # server-normalized ratings (e.g. e621's "s" safe bucket for a "General"
-    # selection) are not wrongly excluded by client-side equality (audit X7).
-    server_rating_applied: bool = False
+    @property
+    def server_rating_applied(self) -> bool:
+        """Thread-local flag: True when the current thread's search applied the rating
+        filter server-side. The UI skips its client-side re-filter when True, so
+        server-normalized ratings (e.g. e621's "s" safe bucket for a "General" selection)
+        are not wrongly excluded by client-side equality (audit X7).
+
+        Audit Y2: backed by threading.local (same mechanism as last_warning) so two
+        concurrent searches with different ratings on the same singleton adapter
+        cannot leak each other's flag and skip the client-side safety filter.
+        """
+        return _tls_get(self, "rating_flags", False)
+
+    @server_rating_applied.setter
+    def server_rating_applied(self, value: bool) -> None:
+        _tls_set(self, "rating_flags", bool(value))
 
     @property
     def last_warning(self) -> str | None:
         """Thread-local warning populated when pagination stops early with partial results (N3)."""
-        warnings_map: dict[int, str | None] = getattr(_ADAPTER_TLS, "warnings", {})
-        return warnings_map.get(id(self))
+        return _tls_get(self, "warnings", None)
 
     @last_warning.setter
     def last_warning(self, value: str | None) -> None:
-        if not hasattr(_ADAPTER_TLS, "warnings"):
-            _ADAPTER_TLS.warnings = {}
-        _ADAPTER_TLS.warnings[id(self)] = value
+        _tls_set(self, "warnings", value)
 
     @abstractmethod
     def can_handle_url(self, url: str) -> bool:

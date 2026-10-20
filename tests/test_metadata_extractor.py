@@ -335,8 +335,9 @@ def test_comfyui_sampler_links_non_consecutive_ids(tmp_path) -> None:
     meta = extract_image_metadata(str(target))
     assert meta.prompt == "1girl, smile"
     assert "lowres, bad hands" in (meta.negative or "")
-    # Unlinked text nodes are preserved in the negative bucket, never lost.
-    assert "pos2 tag" in (meta.negative or "")
+    # Audit Y3: unlinked (orphaned) text nodes are dead nodes and must NOT leak
+    # into the negative prompt — they were polluting it with positive-side words.
+    assert "pos2 tag" not in (meta.negative or "")
 
 
 def test_comfyui_sampler_links_inverted_ids(tmp_path) -> None:

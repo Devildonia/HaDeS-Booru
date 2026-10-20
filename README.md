@@ -110,6 +110,14 @@ python -m ruff check .
 - The Top-tags picker always resets its selection after a search or a Clear, so it can never hold a stale tag that dropped out of the refreshed list.
 - The Recent searches dropdown is now selection-only (no free-text typing) — free text belongs in the Search-tags bar; the dropdown strictly picks from recorded history.
 
+**Post-release audit (R5) hardening** (fixed immediately after the v1.0.6 tag)
+
+- **Rating filter safety (Danbooru)**: when the board rejects the rating tag with HTTP 422 and the adapter falls back to a plain query, the client-side rating filter is now re-armed instead of being skipped — selecting "General" can no longer surface explicit posts after that fallback.
+- **Thread-safe rating flag**: the server-side rating flag is now thread-local (same mechanism as the partial-result warning), so concurrent searches with different ratings can no longer leak each other's filter state. The thread-local storage also uses identity-checked entries, closing an object-id reuse hazard (this hardens `last_warning` as well).
+- **ComfyUI extraction**: orphaned (unlinked) text nodes are now discarded instead of being mixed into the negative prompt, so positive-side words can no longer pollute what users train against.
+- **Port probe**: the probe no longer uses `SO_REUSEADDR` — on Windows that flag could let the probe "bind" a port a listener already holds and falsely report it as free, defeating the auto-fallback.
+- **History privacy**: pasted URLs saved to the search history have any embedded `user:pass@` credentials stripped before persistence.
+
 ## Release Notes — v1.0.5
 
 **Fixes & naming (follow-up to v1.0.4)**

@@ -31,7 +31,9 @@ def find_free_port(host: str, start: int, max_tries: int = MAX_PORT_TRIES) -> in
     """
     for port in range(start, start + max_tries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # Audit Y4: probe WITHOUT SO_REUSEADDR. On Windows that flag lets a probe
+            # bind even when a listener already holds the port, which would falsely
+            # report a busy port as free and defeat the auto-fallback.
             try:
                 probe.bind((host, port))
                 return port

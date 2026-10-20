@@ -64,13 +64,30 @@ def build_gallery_items(posts: list[Post], quality: ImageQuality) -> list[tuple[
 MAX_SEARCH_HISTORY = 12
 
 
+def _scrub_url_credentials(q: str) -> str:
+    """Audit Y5: never persist a pasted URL with embedded user:pass credentials.
+
+    `https://user:pass@host/path` becomes `https://host/path`. Non-URL queries are
+    returned untouched.
+    """
+    if "://" not in q or "@" not in q:
+        return q
+    scheme, rest = q.split("://", 1)
+    head, sep, tail = rest.partition("/")
+    if "@" not in head:
+        return q
+    head = head.split("@", 1)[1]
+    return f"{scheme}://{head}/{tail}" if sep else f"{scheme}://{head}"
+
+
 def record_search_history(query: str, limit: int = MAX_SEARCH_HISTORY) -> list[str]:
     """v1.0.6: prepend a search to the persisted history (dedup, most-recent-first).
 
     Empty/whitespace queries are ignored. Case-insensitive dedup keeps the newest
     position. The list is capped so the dropdown never grows unbounded.
+    Audit Y5: pasted URLs are stored with any embedded user:pass credentials stripped.
     """
-    q = (query or "").strip()
+    q = _scrub_url_credentials((query or "").strip())
     current = [str(x).strip() for x in (config_manager.config.search_history or []) if str(x).strip()]
     if not q:
         return current[:limit]

@@ -203,6 +203,10 @@ class DanbooruAdapter(BooruAdapter):
                     # Fallback if a member account or mirror rejects the extra rating tag with HTTP 422
                     if net_err.status_code == 422 and can_inject_rating and base_tags:
                         can_inject_rating = False
+                        # Audit Y1: the server did NOT apply the rating filter in this
+                        # fallback pass — force the UI's client-side safety filter back on,
+                        # or "General" could return explicit posts.
+                        self.server_rating_applied = False
                         clean_tags = base_tags
                         params["tags"] = clean_tags
                         batch = http_client.get_json(url, params=params, auth=auth)
