@@ -54,7 +54,21 @@ Local dictionary of Danbooru tag definitions with offline lookup.
 
 **Effort**: medium-large. Deferred to v1.1.0 where it can be designed alongside the importer/infrastructure work.
 
-### 4. Audit R6 deferrals (low ROI now, or design work)
+### 4. UI overhaul — professional, clean, selectable light/dark theme
+
+**Current state**: the interface is functional and consistent, but the theme is dark-only (forced in v1.0.7 — the custom palette only defined dark variants and light mode left section headers nearly invisible, contrast 1.05:1), fonts are fetched from Google Fonts (R6-17), and visual polish is uneven across panels (nav badge, status boxes, tab styling).
+
+**Planned work**:
+- Design pass: spacing, typography, hierarchy and component styling for a professional, clean look across all tabs (Search, Gallery & Inspector, Batch Export, Normalization, Blacklist, Image to Prompt, Settings).
+- **Selectable light/dark theme**: proper light-mode variants of the custom palette (WCAG AA contrast, ≥ 4.5:1), a theme picker persisted in `config.local.json`, and `prefers-color-scheme` honored as the initial default.
+- Bundle Inter / JetBrains Mono locally (closes R6-17) so the UI works fully offline.
+- Design tokens + component inventory to keep the theme maintainable (pairs well with the R6-25 `layout.py` split).
+- i18n: EN/ES parity for any new labels; zero-emoji rule preserved.
+- Regression coverage: wiring counts, theme persistence, and a visual smoke pass.
+
+**Effort**: large — the biggest UX investment on the roadmap.
+
+### 5. Audit R6 deferrals (low ROI now, or design work)
 
 Recorded from the R6 audit (October 2026); the fixes themselves shipped in v1.0.7.
 
