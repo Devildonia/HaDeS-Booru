@@ -15,7 +15,7 @@ TRANSLATIONS: dict[Language, dict[str, str]] = {
         "app_title": "HaDeS Booru",
         "app_subtitle": "Multi-source tag extractor, prompt normalizer, and dataset utility",
         "header_badge_runtime": "PYTHON 3.11",
-        "header_badge_sources": "27 SOURCES",
+        "header_badge_sources": "{count} SOURCES",
         "header_meta_line1": "Engines: Danbooru, Gelbooru/DAPI, Moebooru, E621, Philomena, Zerochan, ArtStation, DeviantArt, Pawoo",
         "header_meta_line2": "Enter space-separated search tags or paste any direct post/listing URL",
         # Top Command Deck
@@ -222,7 +222,7 @@ TRANSLATIONS: dict[Language, dict[str, str]] = {
         "app_title": "HaDeS Booru",
         "app_subtitle": "Extractor multi-fuente de etiquetas, normalizador de prompts y generador de datasets",
         "header_badge_runtime": "PYTHON 3.11",
-        "header_badge_sources": "27 FUENTES",
+        "header_badge_sources": "{count} FUENTES",
         "header_meta_line1": "Motores: Danbooru, Gelbooru/DAPI, Moebooru, E621, Philomena, Zerochan, ArtStation, DeviantArt, Pawoo",
         "header_meta_line2": "Introduce tags separados por espacios o pega cualquier URL directa de post/listado",
         # Top Command Deck

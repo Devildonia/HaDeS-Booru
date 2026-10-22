@@ -28,7 +28,7 @@ Multi-source tag extractor, semantic prompt normalizer, offline tag dictionary, 
 
 ## Screenshots
 
-> Captured against **Safebooru** (safe-only source) — `hatsune_miku 1girl`, 20 results.
+> Captured against **Safebooru (DAPI)** (safe-only source) — `hatsune_miku 1girl`, 20 results. Shots 1-3 in the Light theme, shots 4-5 in the Dark theme.
 
 | Gallery & Inspector | Batch Export |
 |---|---|
@@ -37,6 +37,14 @@ Multi-source tag extractor, semantic prompt normalizer, offline tag dictionary, 
 **Normalization & API Keys**
 
 ![Normalization & API Keys](docs/screenshots/03-normalization.png)
+
+**Tag Dictionary (Dark theme)**
+
+![Tag Dictionary](docs/screenshots/04-tag-dictionary.png)
+
+**Blacklist (Dark theme)**
+
+![Blacklist](docs/screenshots/05-blacklist.png)
 
 ## Project Structure
 

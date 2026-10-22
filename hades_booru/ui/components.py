@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import cast
 
 from hades_booru import __version__
+from hades_booru.adapters.registry import registry
 from hades_booru.i18n import t
 from hades_booru.models import ExtractedImageMeta, Language, Post
 from hades_booru.normalizer import PromptNormalizer, normalize_tag_key, parse_tag_list
@@ -65,7 +66,9 @@ def render_header_html(lang: str = "en") -> str:
     subtitle = html.escape(t(lang, "app_subtitle"))
     ver_pill = html.escape(f"v{__version__}")
     badge_runtime = html.escape(t(lang, "header_badge_runtime"))
-    badge_sources = html.escape(t(lang, "header_badge_sources"))
+    badge_sources = html.escape(
+        t(lang, "header_badge_sources").format(count=len(registry.get_all_specs()))
+    )
     meta_1 = html.escape(t(lang, "header_meta_line1"))
     meta_2 = html.escape(t(lang, "header_meta_line2"))
 
