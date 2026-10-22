@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 
 import httpx
+from http_mocks import DummyClient, make_streamable_response
 
 from hades_booru.adapters.artplatforms import ArtPlatformsAdapter
 from hades_booru.adapters.danbooru import DanbooruAdapter
@@ -171,32 +172,15 @@ def test_http_client_respects_retry_after(monkeypatch) -> None:
 
     req = httpx.Request("GET", "https://example.com/x")
     responses = [
-        httpx.Response(429, headers={"Retry-After": "7"}, request=req),
-        httpx.Response(200, text="ok", request=req),
+        make_streamable_response(429, req, headers={"Retry-After": "7"}),
+        make_streamable_response(200, req, text="ok"),
     ]
-    call_count = 0
-
-    class DummyClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args) -> None:
-            pass
-
-        def get(self, url: str, **kwargs):
-            nonlocal call_count
-            resp = responses[call_count]
-            call_count += 1
-            return resp
-
-    monkeypatch.setattr("httpx.Client", DummyClient)
+    dummy = DummyClient(responses)
+    monkeypatch.setattr("httpx.Client", lambda **kwargs: dummy)
     text = client.get_text("https://example.com/x", retries=1)
 
     assert text == "ok"
-    assert call_count == 2
+    assert dummy.call_count == 2
     assert sleeps[0] >= 7.0
 
 

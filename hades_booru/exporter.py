@@ -59,10 +59,55 @@ def _sanitize_filename_segment(text: str) -> str:
     return clean[:36] or "all"
 
 
+def _magic_ext(data: bytes) -> str | None:
+    """Sniffs the concrete format from binary magic bytes (None when unknown or too short)."""
+    if len(data) < 12:
+        return None
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return ".gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    if data[:2] == b"BM":
+        return ".bmp"
+    if data.startswith((b"\xff\x0a", b"\x00\x00\x00\x0cJXL ")):
+        return ".jxl"
+    if data[4:8] == b"ftyp":
+        brand = data[8:12]
+        if brand in (b"avif", b"avis"):
+            return ".avif"
+        if brand in (b"heic", b"heix", b"hevc", b"mif1"):
+            return ".heic"
+        if brand in (b"isom", b"mp41", b"mp42", b"M4V "):
+            return ".mp4"
+    if data.startswith(b"\x1a\x45\xdf\xa3"):
+        return ".webm"
+    return None
+
+
+def looks_like_image(data: bytes) -> bool:
+    """Audit R6-06: magic-byte sniff for the image formats the gallery can render.
+
+    A `200 text/html` error page served from a `.jpg` URL must not be cached as an
+    image — this check is the gate before anything is written to the gallery cache.
+    """
+    return _magic_ext(data) in (".png", ".jpg", ".gif", ".webp")
+
+
 def guess_media_extension(url: str, content_type: str = "", data: bytes = b"") -> str:
-    """Determines the accurate file extension from URL path, HTTP Content-Type, or binary magic bytes.
+    """Determines the accurate file extension from binary magic bytes, URL path, or HTTP Content-Type.
+
+    Audit R6-23: magic bytes are ground truth and are preferred over the URL — a CDN
+    serving WebP from a `.jpg` URL now yields `.webp` instead of a mislabeled file.
     Falls back to '.bin' if the format cannot be identified rather than mislabeling as '.jpg'.
     """
+    magic = _magic_ext(data)
+    if magic is not None:
+        return magic
+
     path = urlparse(url).path.lower()
     for ext in KNOWN_EXTENSIONS:
         if path.endswith(ext):
@@ -71,31 +116,6 @@ def guess_media_extension(url: str, content_type: str = "", data: bytes = b"") -
     ct_base = content_type.split(";")[0].strip().lower()
     if ct_base in CONTENT_TYPE_TO_EXT:
         return CONTENT_TYPE_TO_EXT[ct_base]
-
-    # Inspect binary magic bytes when URL and Content-Type are ambiguous
-    if len(data) >= 12:
-        if data.startswith(b"\x89PNG\r\n\x1a\n"):
-            return ".png"
-        if data.startswith(b"\xff\xd8\xff"):
-            return ".jpg"
-        if data.startswith((b"GIF87a", b"GIF89a")):
-            return ".gif"
-        if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-            return ".webp"
-        if data[:2] == b"BM":
-            return ".bmp"
-        if data.startswith((b"\xff\x0a", b"\x00\x00\x00\x0cJXL ")):
-            return ".jxl"
-        if data[4:8] == b"ftyp":
-            brand = data[8:12]
-            if brand in (b"avif", b"avis"):
-                return ".avif"
-            if brand in (b"heic", b"heix", b"hevc", b"mif1"):
-                return ".heic"
-            if brand in (b"isom", b"mp41", b"mp42", b"M4V "):
-                return ".mp4"
-        if data.startswith(b"\x1a\x45\xdf\xa3"):
-            return ".webm"
 
     return ".bin"
 
@@ -120,7 +140,9 @@ class BulkExporter:
         safe_source = _sanitize_filename_segment(source_name)
         safe_tags = _sanitize_filename_segment(query_tags)
         safe_prefix = _sanitize_filename_segment(custom_prefix) if custom_prefix.strip() else ""
-        date_stamp = dt.date.today().isoformat()
+        # Audit R6-22: include the time so two exports of the same query on the same
+        # day no longer collide (the caller also suffixes _2/_3 if the file exists).
+        date_stamp = dt.datetime.now().strftime("%Y-%m-%d_%H%M")
         ext = "zip" if mode == "trainer-zip" else "txt"
         prefix_part = f"{safe_prefix}_" if safe_prefix else ""
         return f"{prefix_part}{safe_source}_{safe_tags}_{mode}_{date_stamp}.{ext}"
@@ -184,9 +206,19 @@ class BulkExporter:
         progress_cb: Callable[[float, str], None] | None = None,
     ) -> Path:
         """Writes a downloadable .txt or .zip file to output_dir and returns its Path."""
+        # Audit R6-11: reset stale per-instance state first so two overlapping exports
+        # never mix each other's error reports in the UI.
+        self.last_zip_errors = []
         output_dir.mkdir(parents=True, exist_ok=True)
         filename = self.generate_filename(source_name, query_tags, mode, custom_prefix)
         target_path = output_dir / filename
+        if target_path.exists():
+            # Audit R6-22: never silently overwrite a previous export.
+            stem, suffix = Path(filename).stem, Path(filename).suffix
+            counter = 2
+            while (output_dir / f"{stem}_{counter}{suffix}").exists():
+                counter += 1
+            target_path = output_dir / f"{stem}_{counter}{suffix}"
 
         if mode == "trainer-zip":
             zip_errors: list[str] = []

@@ -12,7 +12,7 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
-from hades_booru.adapters.base import BooruAdapter, ProgressCallback
+from hades_booru.adapters.base import BooruAdapter, ProgressCallback, host_matches
 from hades_booru.config import config_manager
 from hades_booru.http_client import BooruNetworkError, http_client
 from hades_booru.models import CategorizedTags, Post, Rating
@@ -74,10 +74,11 @@ class DanbooruAdapter(BooruAdapter):
         self.default_domain = domain
 
     def can_handle_url(self, url: str) -> bool:
-        lower = url.lower()
-        if self.default_domain.lower() in lower:
+        # Audit R6-01: exact-host matching (no substring) so lookalike domains or
+        # `?ref=danbooru.donmai.us` tricks never route credentials elsewhere.
+        if host_matches(url, self.default_domain):
             return True
-        if self.id == "danbooru" and "testbooru.donmai.us" in lower:
+        if self.id == "danbooru" and host_matches(url, "testbooru.donmai.us"):
             return True
         return False
 
@@ -245,7 +246,9 @@ class DanbooruAdapter(BooruAdapter):
 
     def fetch_single_by_url(self, url: str) -> Post:
         parsed = urlparse(url)
-        host = parsed.hostname or self.default_domain
+        # Audit R6-01: never trust the pasted hostname — always query this adapter's
+        # own board so Basic-Auth credentials cannot leak to a lookalike host.
+        host = self.default_domain
         match = POST_ID_RE.search(parsed.path)
         if not match:
             raise BooruNetworkError(f"Could not extract post ID from Danbooru URL: {url}", url=url)

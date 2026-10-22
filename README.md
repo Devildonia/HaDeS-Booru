@@ -1,4 +1,4 @@
-# HaDeS Booru v1.0.6
+# HaDeS Booru v1.0.7
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -86,6 +86,8 @@ The web interface listens on `http://127.0.0.1:7863` (local only by default).
 > **Port note**: the default port is `7863`, chosen to avoid clashing with Stable Diffusion WebUI / Forge (`7860` / `7861`) and ComfyUI (`8188`). If that port is already in use, the app automatically probes the next sequential ports and binds the first free one, so the UI always comes up. The actually-chosen URL is printed to the console on launch.
 
 > **Security note**: `python app.py --share` exposes the interface through a public Gradio tunnel. Avoid this flag if you have loaded personal API credentials.
+>
+> **Private-network guard**: requests to private, loopback, reserved or link-local addresses are blocked by default (including on every redirect hop). If the app must reach a self-hosted board on your LAN, set `HADES_ALLOW_PRIVATE_HOSTS=1`.
 
 ### 3. Run Tests and Linter (development)
 ```bash
@@ -93,6 +95,44 @@ pip install -r requirements-dev.txt
 python -m pytest
 python -m ruff check .
 ```
+
+## Release Notes — v1.0.7
+
+**Post-release audit (R6) hardening** — the most exhaustive audit of the codebase so far (static analysis, real-browser E2E, dependency audit, coverage). 1 High + 6 Medium + 20 Low findings; all High/Medium and the practical Lows are fixed here, the rest is recorded in [ROADMAP.md](ROADMAP.md).
+
+**Security (High + Medium)**
+
+- **Danbooru credential-leak fix (R6-01, High — existed since v1.0.0)**: `can_handle_url` matched the board's domain as a *substring of the whole URL* (query included), so a crafted link like `https://danbooru.donmai.us.evil.example/posts/1` was treated as Danbooru and your Basic-Auth user + API key were sent to the attacker's host. All 7 adapters now use exact host matching (`host == domain` or `*.domain`), and Danbooru's fetch-by-URL additionally pins the API call to its own domain as defense in depth. Three malicious-URL regression tests keep it closed.
+- **SSRF / private-network guard (R6-04)**: requests to loopback, private, reserved or link-local addresses are now blocked — including on every redirect hop — and network errors no longer echo the response body into the UI (only status code + host). Matters when the app is exposed via `--share` / `--host 0.0.0.0`. Override with `HADES_ALLOW_PRIVATE_HOSTS=1` for a self-hosted LAN board.
+- **Search-history credential scrub (R6-05)**: pasted URLs saved to the history now have sensitive query parameters stripped (`api_key`, `key`, `token`, `password`, `login`, `user_id`, …) — not only `user:pass@`. Pasting a full API URL no longer writes a plaintext key to `config.local.json`.
+- **Image-cache poisoning (R6-06)**: a `200 text/html` response (e.g. a Cloudflare page) served from a `.jpg` URL is no longer stored and re-served on every later search. Downloads are validated with magic bytes before being cached, and already-poisoned cache entries are detected, deleted and re-downloaded.
+- **Multi-instance config safety (R6-07)**: since the v1.0.6 port auto-fallback, running two instances from the same folder works — and their `config.local.json` saves no longer clobber each other. Saves take a `filelock`, re-read the file and merge, so history, blacklist and language are preserved across instances.
+
+**Robustness (Medium + practical Low)**
+
+- **Image-to-Prompt parser surface (R6-03/14)**: files are now opened with `Image.open(path, formats=["PNG", "JPEG", "WEBP"])` — a GIF renamed `.png` is rejected *before* Pillow's GIF plugin parses it; `MAX_IMAGE_PIXELS` is set explicitly (64 MP) and `DecompressionBombError` becomes a friendly status instead of a raw exception.
+- **Response size caps (R6-20)**: JSON/XML bodies are capped at 16 MiB and media downloads at 512 MiB (streamed, not buffered whole), so a hostile `file_url` cannot exhaust memory.
+- **Rating-flag residual (R6-09)**: the thread-local `server_rating_applied` flag is reset before the fetch-by-URL path, so a "General" selection no longer skips the client-side filter for a pasted post after an earlier safe-rated search.
+- **`javascript:` hrefs (R6-10)**: source links in the UI only accept `http(s)://` URLs — anything else renders inert (`#`).
+- **ZIP error state (R6-11)**: `last_zip_errors` is reset at the start of each export, so concurrent exports no longer mix each other's warnings.
+- **Folder dialog (R6-15)**: native-dialog failures are logged instead of being silently swallowed.
+- **Dark theme (R6-18)**: the app now forces Gradio's dark mode — the custom palette is dark-only, and light mode left section headers nearly invisible (contrast 1.05:1 vs the 4.5:1 WCAG AA minimum).
+- **Windows launcher (R6-19)**: `start.bat` now does `cd /d "%~dp0"`, so a shortcut with a different working directory no longer makes `config.local.json` / `.cache` / `exports` point at the wrong folder.
+- **Export filenames (R6-22)**: ZIP/TXT names now include the time (`%Y-%m-%d_%H%M`) and get a `_2` / `_3` suffix on collision — two exports on the same day no longer overwrite each other.
+- **Magic-first extensions (R6-23)**: the stored file extension follows the actual byte signature before the URL's extension, so a CDN serving WebP from a `.jpg` URL is stored with the right extension.
+- **Config schema (R6-26)**: `AppConfig` now carries `schema_version` (1), preparing for future schema migrations instead of a silent full reset.
+
+**Dependencies (R6-02)**
+
+- `certifi` updated to `2026.10.19` (fixes PYSEC-2026-4320); `requirements.lock` regenerated from a clean venv.
+- **Honest Pillow note**: Pillow is pinned to `12.3.0` — the latest release installable alongside Gradio 6.x, which hard-pins `pillow<13`. Pillow 13.0.0 fixes 24 known CVEs, but with 13.x a fresh `pip install -r requirements.txt` fails dependency resolution, so installability wins. Practical impact here is limited (Pillow only parses local, user-provided image files, and the R6-03 fix already restricts which parsers can run). The 24 CVEs are documented and explicitly ignored in the CI `pip-audit` job with that justification — to be removed as soon as Gradio supports Pillow 13.
+
+**Tests**
+
+- 18 new regression tests (`tests/test_audit_r6.py`): malicious-URL rejection by every adapter, GIF-as-PNG rejection, SSRF guard + env override, history query scrub, poisoned-cache recovery, multi-instance config merge, rating-flag reset, `javascript:` href, ZIP-error reset, launcher `cd /d`, timestamped filenames with collision suffix, magic-first extension, `schema_version`.
+- Shared streaming HTTP mocks extracted to `tests/http_mocks.py`. **143 tests, all green; `ruff` clean; CI `pip-audit` command verified passing.**
+
+**Deferred to v1.1.0** (see [ROADMAP.md](ROADMAP.md)): CI hardening (R6-08), local font bundling (R6-17), pagination dedup (R6-24), `layout.py` split (R6-25). The Rule34.us scraper rating is intentionally conservative (R6-21) — documented as a known limitation, not a bug.
 
 ## Release Notes — v1.0.6
 

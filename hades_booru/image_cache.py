@@ -14,7 +14,7 @@ import threading
 from pathlib import Path
 
 from hades_booru.demo_data import generate_placeholder_image
-from hades_booru.exporter import guess_media_extension
+from hades_booru.exporter import guess_media_extension, looks_like_image
 from hades_booru.http_client import http_client
 from hades_booru.models import ImageQuality, Post
 
@@ -42,8 +42,22 @@ class DiskImageCache:
         with self._lock:
             for ext in BROWSER_SAFE_EXTS:
                 candidate = self._dir / f"{key_prefix}{ext}"
-                if candidate.exists() and candidate.stat().st_size > 0:
+                if not candidate.exists() or candidate.stat().st_size == 0:
+                    continue
+                # Audit R6-06: validate the cached bytes before reusing them. A poisoned
+                # entry (e.g. an HTML error page saved with an image extension) is
+                # removed so the next run re-downloads a real image.
+                try:
+                    with candidate.open("rb") as fh:
+                        head = fh.read(12)
+                except OSError:
+                    head = b""
+                if looks_like_image(head):
                     return candidate
+                try:
+                    candidate.unlink()
+                except OSError:
+                    pass
         return None
 
     def _write_placeholder(self, post: Post, key_prefix: str, color_hex: str = "#3b82f6") -> Path:
@@ -79,6 +93,10 @@ class DiskImageCache:
         for candidate_url in urls_to_try:
             try:
                 raw_bytes, ct = http_client.download_bytes(candidate_url)
+                # Audit R6-06: never cache bytes that are not actually an image — a
+                # `200 text/html` served from a `.jpg` URL would poison the cache.
+                if not looks_like_image(raw_bytes):
+                    continue
                 ext = guess_media_extension(candidate_url, ct, raw_bytes)
                 if ext not in BROWSER_SAFE_EXTS:
                     # Non-browser-safe media (HEIC/JXL/MP4/WebM/.bin): try next fallback URL or return placeholder card

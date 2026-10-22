@@ -225,6 +225,10 @@ class AppConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    # Audit R6-26: explicit schema generation. Future migrations can inspect this
+    # value instead of treating any schema drift as a corrupt file.
+    schema_version: int = 1
+
     normalizer: NormalizerConfig = Field(default_factory=NormalizerConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
     credentials: dict[str, SourceCredential] = Field(

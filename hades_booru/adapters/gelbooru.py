@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from hades_booru.adapters.base import BooruAdapter, ProgressCallback
+from hades_booru.adapters.base import BooruAdapter, ProgressCallback, host_matches
 from hades_booru.config import config_manager
 from hades_booru.http_client import BooruNetworkError, http_client
 from hades_booru.models import COMMON_META_TAGS, CategorizedTags, Post, Rating
@@ -105,8 +105,8 @@ class GelbooruAdapter(BooruAdapter):
         self.api_host = api_host or domain
 
     def can_handle_url(self, url: str) -> bool:
-        lower = url.lower()
-        return self.default_domain.lower() in lower
+        # Audit R6-01: exact-host matching (no substring).
+        return host_matches(url, self.default_domain)
 
     def _apply_credentials(self, params: dict[str, Any]) -> None:
         creds = config_manager.get_credentials(self.id)

@@ -9,11 +9,13 @@ Implements:
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import gradio as gr
 
@@ -55,6 +57,8 @@ from hades_booru.ui.components import (
     render_status_pill_html,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def build_gallery_items(posts: list[Post], quality: ImageQuality) -> list[tuple[str, str]]:
     """Resolves disk-cached gallery image paths for all posts in the batch (C2)."""
@@ -64,20 +68,41 @@ def build_gallery_items(posts: list[Post], quality: ImageQuality) -> list[tuple[
 MAX_SEARCH_HISTORY = 12
 
 
-def _scrub_url_credentials(q: str) -> str:
-    """Audit Y5: never persist a pasted URL with embedded user:pass credentials.
+# Audit R6-05: query params that commonly carry secrets in booru API URLs.
+_SENSITIVE_QUERY_PARAMS = frozenset({
+    "api_key",
+    "apikey",
+    "key",
+    "token",
+    "password",
+    "pass",
+    "login",
+    "user_id",
+    "auth",
+    "access_token",
+    "secret",
+})
 
-    `https://user:pass@host/path` becomes `https://host/path`. Non-URL queries are
-    returned untouched.
+
+def _scrub_url_credentials(q: str) -> str:
+    """Audit Y5 + R6-05: never persist a pasted URL with embedded credentials.
+
+    Strips `user:pass@` AND sensitive query params (`api_key=`, `token=`, `login=`,
+    ...) that Gelbooru/Danbooru API URLs carry. Non-URL queries are returned
+    untouched; safe query params are preserved.
     """
-    if "://" not in q or "@" not in q:
+    if "://" not in q:
         return q
-    scheme, rest = q.split("://", 1)
-    head, sep, tail = rest.partition("/")
-    if "@" not in head:
-        return q
-    head = head.split("@", 1)[1]
-    return f"{scheme}://{head}/{tail}" if sep else f"{scheme}://{head}"
+    parts = urlsplit(q.strip())
+    host = parts.hostname or ""
+    if parts.port:
+        host = f"{host}:{parts.port}"
+    kept = [
+        (k, v)
+        for k, v in parse_qsl(parts.query, keep_blank_values=True)
+        if k.lower() not in _SENSITIVE_QUERY_PARAMS
+    ]
+    return urlunsplit((parts.scheme, host, parts.path, urlencode(kept), ""))
 
 
 def record_search_history(query: str, limit: int = MAX_SEARCH_HISTORY) -> list[str]:
@@ -212,8 +237,8 @@ def open_native_folder_dialog(current_dir: str, lang: str = "en") -> str:
             config_manager.config.export.local_export_dir = chosen
             config_manager.save()
             return chosen
-    except Exception:
-        pass
+    except Exception as err:  # Audit R6-15: log instead of failing silently
+        logger.warning("Native folder dialog failed: %s", err)
     return current_dir
 
 
@@ -260,7 +285,9 @@ def create_gradio_app() -> gr.Blocks:
     )
     initial_status = render_status_pill_html(t(lang, "status_ready"), lang=lang, state="ready")
 
-    with gr.Blocks(title=f"HaDeS Booru v{__version__}") as app:
+    # Audit R6-18: the custom palette is designed for dark mode; pin it so the app
+    # never renders on Gradio's light surfaces (which broke the custom CSS contrast).
+    with gr.Blocks(title=f"HaDeS Booru v{__version__}", mode="dark") as app:
         posts_state = gr.State(value=initial_posts)
         selected_idx_state = gr.State(value=0)
 
@@ -913,6 +940,10 @@ def create_gradio_app() -> gr.Blocks:
                 if detected:
                     effective_source = detected.adapter.id
                     if detected.is_direct_post:
+                        # Audit R6-09: the thread-local flag can still be True from an
+                        # earlier search in this worker thread; a pasted single post must
+                        # always pass through the client-side rating safety net below.
+                        detected.adapter.server_rating_applied = False
                         progress(0.2, desc=t(cur_lang, "progress_direct", source=detected.adapter.name))
                         single_post = detected.adapter.fetch_single_by_url(trimmed_q)
                         results = [single_post]

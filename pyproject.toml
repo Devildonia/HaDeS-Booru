@@ -1,6 +1,6 @@
 [project]
 name = "hades-booru"
-version = "1.0.6"
+version = "1.0.7"
 description = "Universal Booru Prompt Harvester, Tag Normalizer & LoRA Dataset Builder (Python + Gradio)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -10,7 +10,13 @@ dependencies = [
     "gradio>=6.0,<7",
     "httpx>=0.27.0",
     "pydantic>=2.8.0",
-    "pillow>=10.0.0",
+    # Audit R6-02: latest Pillow 12.x (12.3.0). Gradio 6.x hard-pins pillow<13,
+    # so 13.0.0 would make `pip install -r requirements.txt` fail (ResolutionImpossible).
+    "pillow>=12.3.0,<13.0",
+    # Audit R6-02: certifi 2026.10.19 fixes PYSEC-2026-4320 (stale bundle entry).
+    "certifi>=2026.10.19",
+    # Audit R6-07: cross-process config write lock (was only a transitive dep).
+    "filelock>=3.15.0",
 ]
 
 [project.optional-dependencies]

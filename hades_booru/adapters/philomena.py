@@ -11,7 +11,7 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
-from hades_booru.adapters.base import BooruAdapter, ProgressCallback
+from hades_booru.adapters.base import BooruAdapter, ProgressCallback, host_matches
 from hades_booru.http_client import BooruNetworkError, http_client
 from hades_booru.models import CategorizedTags, Post, Rating
 
@@ -30,7 +30,8 @@ class PhilomenaAdapter(BooruAdapter):
         self.default_domain = domain
 
     def can_handle_url(self, url: str) -> bool:
-        return self.default_domain.lower() in url.lower()
+        # Audit R6-01: exact-host matching (no substring).
+        return host_matches(url, self.default_domain)
 
     def _map_post(self, raw: dict[str, Any]) -> Post | None:
         post_id = raw.get("id")

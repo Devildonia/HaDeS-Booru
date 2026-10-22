@@ -8,10 +8,23 @@ import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlparse
 
 from hades_booru.models import Post
 
 ProgressCallback = Callable[[float, str], None]
+
+
+def host_matches(url: str, domain: str) -> bool:
+    """True if `url`'s hostname is exactly `domain` or a subdomain of it (audit R6-01).
+
+    Replaces the old substring check so lookalike hosts and query/fragment tricks
+    never match: `https://danbooru.donmai.us.evil.example` and
+    `https://evil.example/?ref=danbooru.donmai.us` both return False.
+    """
+    host = (urlparse(url).hostname or "").lower()
+    d = domain.lower()
+    return bool(host) and (host == d or host.endswith("." + d))
 
 _ADAPTER_TLS = threading.local()
 

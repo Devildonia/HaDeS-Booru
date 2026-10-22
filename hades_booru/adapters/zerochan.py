@@ -11,7 +11,7 @@ import time
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
-from hades_booru.adapters.base import BooruAdapter, ProgressCallback
+from hades_booru.adapters.base import BooruAdapter, ProgressCallback, host_matches
 from hades_booru.http_client import BooruNetworkError, http_client
 from hades_booru.models import COMMON_META_TAGS, CategorizedTags, Post
 
@@ -60,7 +60,8 @@ class ZerochanAdapter(BooruAdapter):
         self.default_domain = domain
 
     def can_handle_url(self, url: str) -> bool:
-        return "zerochan.net" in url.lower()
+        # Audit R6-01: exact-host matching (no substring).
+        return host_matches(url, "zerochan.net")
 
     def _map_post(self, raw: dict[str, Any]) -> Post | None:
         post_id = raw.get("id")

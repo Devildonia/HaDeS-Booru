@@ -54,4 +54,34 @@ jobs:
         run: pip install pip-audit
 
       - name: Audit locked dependencies
-        run: python -m pip_audit -r requirements.lock
+        # Pillow 12.3.0 CVEs (all fixed in 13.0.0) are ignored on purpose: Gradio 6.x
+        # hard-pins pillow<13, so the fixed release cannot be installed alongside it
+        # (a fresh `pip install -r requirements.txt` would fail otherwise). Practical
+        # impact is limited: Pillow here only parses local user-provided image files.
+        # Remove the ignores as soon as Gradio supports Pillow 13.
+        run: |
+          python -m pip_audit -r requirements.lock \
+            --ignore-vuln CVE-2026-112390 \
+            --ignore-vuln CVE-2026-112391 \
+            --ignore-vuln CVE-2026-112392 \
+            --ignore-vuln CVE-2026-112393 \
+            --ignore-vuln CVE-2026-112395 \
+            --ignore-vuln CVE-2026-112396 \
+            --ignore-vuln CVE-2026-112397 \
+            --ignore-vuln CVE-2026-112399 \
+            --ignore-vuln CVE-2026-112400 \
+            --ignore-vuln CVE-2026-112401 \
+            --ignore-vuln CVE-2026-112402 \
+            --ignore-vuln CVE-2026-112404 \
+            --ignore-vuln CVE-2026-112405 \
+            --ignore-vuln CVE-2026-112406 \
+            --ignore-vuln CVE-2026-112891 \
+            --ignore-vuln CVE-2026-112892 \
+            --ignore-vuln CVE-2026-112893 \
+            --ignore-vuln CVE-2026-112894 \
+            --ignore-vuln CVE-2026-112895 \
+            --ignore-vuln CVE-2026-112896 \
+            --ignore-vuln CVE-2026-112897 \
+            --ignore-vuln CVE-2026-112899 \
+            --ignore-vuln CVE-2026-112900 \
+            --ignore-vuln CVE-2026-112901

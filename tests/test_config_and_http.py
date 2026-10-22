@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 import httpx
+from http_mocks import DummyClient, make_streamable_response
 
 from hades_booru.config import ConfigManager
 from hades_booru.demo_data import DEMO_POSTS
@@ -61,33 +62,16 @@ def test_http_client_download_bytes_retries_on_500_and_429(monkeypatch) -> None:
 
     req = httpx.Request("GET", "https://example.com/image.png")
     responses = [
-        httpx.Response(429, headers={"Retry-After": "1"}, request=req),
-        httpx.Response(502, request=req),
-        httpx.Response(200, headers={"content-type": "image/png"}, content=b"\x89PNG_DATA", request=req),
+        make_streamable_response(429, req, headers={"Retry-After": "1"}),
+        make_streamable_response(502, req),
+        make_streamable_response(200, req, headers={"content-type": "image/png"}, content=b"\x89PNG_DATA"),
     ]
-    call_count = 0
-
-    class DummyClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args) -> None:
-            pass
-
-        def get(self, url: str):
-            nonlocal call_count
-            resp = responses[call_count]
-            call_count += 1
-            return resp
-
-    monkeypatch.setattr("httpx.Client", DummyClient)
+    dummy = DummyClient(responses)
+    monkeypatch.setattr("httpx.Client", lambda **kwargs: dummy)
     data, content_type = client.download_bytes("https://example.com/image.png", retries=2)
     assert data == b"\x89PNG_DATA"
     assert content_type == "image/png"
-    assert call_count == 3
+    assert dummy.call_count == 3
     assert len(sleep_calls) == 2
 
 

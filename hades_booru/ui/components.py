@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import html
+import re
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -231,6 +232,10 @@ def render_post_inspector_html(
     rating_color = RATING_COLORS.get(post.rating, RATING_COLORS["u"])
     dims = f"{post.width} x {post.height} px" if post.width and post.height else "N/A"
     safe_url = html.escape(post.source_url, quote=True)
+    # Audit R6-10: only http(s) targets may be clickable — a remote JSON payload
+    # could otherwise inject `javascript:`/`data:` URLs that survive html.escape.
+    if not re.match(r"^https?://", post.source_url, re.IGNORECASE):
+        safe_url = "#"
     safe_source = html.escape(post.source_name)
     safe_id = html.escape(post.id)
 

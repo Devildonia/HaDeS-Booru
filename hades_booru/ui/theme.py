@@ -162,7 +162,13 @@ footer {
     background: var(--hb-bg-surface);
     border: 1px solid var(--hb-border-subtle);
     border-radius: var(--hb-radius-control);
-    height: 36px;
+    /* Audit R6-27: min-height + nowrap so the badge never wraps/splits at narrow widths */
+    min-height: 36px;
+    height: auto;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -171,7 +177,7 @@ footer {
     font-weight: 600;
     color: var(--hb-text-secondary);
     letter-spacing: 0.04em;
-    padding: 0 10px;
+    padding: 4px 10px;
 }
 .hades-copy-btn {
     font-weight: 600 !important;

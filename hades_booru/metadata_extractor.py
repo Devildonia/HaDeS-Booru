@@ -20,10 +20,15 @@ import json
 import re
 from pathlib import Path
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
+from PIL.Image import DecompressionBombError, UnidentifiedImageError
 
 from hades_booru.models import ExtractedImageMeta
 from hades_booru.normalizer import parse_tag_list
+
+# Audit R6-03: explicit, generous decompression-bomb ceiling so the guard raises a
+# clean error instead of Pillow's default (which is lower) or unbounded memory use.
+Image.MAX_IMAGE_PIXELS = 64_000_000  # 64 MP
 
 SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 SUPPORTED_FORMATS: frozenset[str] = frozenset({"PNG", "JPEG", "WEBP"})
@@ -297,7 +302,10 @@ def extract_image_metadata(file_path: str) -> ExtractedImageMeta:
         )
 
     try:
-        with Image.open(path) as img:
+        # Audit R6-03: only instantiate the plugins we actually support, so a file
+        # with a lying extension (e.g. a GIF named .png) never engages unrelated
+        # decoders (TIFF/EPS/...) before our format check runs.
+        with Image.open(path, formats=["PNG", "JPEG", "WEBP"]) as img:
             if img.format is None or img.format.upper() not in SUPPORTED_FORMATS:
                 raise MetadataExtractionError(f"Unsupported image format: {img.format}")
             width, height = img.size
@@ -307,6 +315,11 @@ def extract_image_metadata(file_path: str) -> ExtractedImageMeta:
             # Pillow stores XMP under 'XMP' for JPEG/WebP but under
             # 'XML:com.adobe.xmp' for PNG (audit X3).
             xmp_blob = info.get("XMP") or info.get("XML:com.adobe.xmp")
+    except DecompressionBombError as err:
+        # Audit R6-14: surface a clean, user-friendly error instead of raw Pillow text.
+        raise MetadataExtractionError(
+            "Image is too large to process safely (decompression-bomb guard)."
+        ) from err
     except UnidentifiedImageError as err:
         raise MetadataExtractionError(f"Not a valid image: {err}") from err
 

@@ -11,7 +11,7 @@ from html import unescape
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-from hades_booru.adapters.base import BooruAdapter, ProgressCallback
+from hades_booru.adapters.base import BooruAdapter, ProgressCallback, host_matches
 from hades_booru.http_client import BooruNetworkError, http_client
 from hades_booru.models import CategorizedTags, Post
 
@@ -30,17 +30,17 @@ class ArtPlatformsAdapter(BooruAdapter):
         self.default_domain = domain
 
     def can_handle_url(self, url: str) -> bool:
-        lower = url.lower()
+        # Audit R6-01: exact-host matching (no substring).
         if self.id == "deviantart":
-            return "deviantart.com" in lower
+            return host_matches(url, "deviantart.com")
         if self.id == "artstation":
-            return "artstation.com" in lower
+            return host_matches(url, "artstation.com")
         if self.id == "pawoo":
-            return "pawoo.net" in lower
+            return host_matches(url, "pawoo.net")
         if self.id == "ehentai":
-            return "e-hentai.org" in lower or "exhentai.org" in lower
+            return host_matches(url, "e-hentai.org") or host_matches(url, "exhentai.org")
         if self.id == "generic":
-            return "booru.io" in lower
+            return host_matches(url, "booru.io")
         return False
 
     def search(
