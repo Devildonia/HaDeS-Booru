@@ -89,4 +89,5 @@ Related mappings: R6-12 → limitation X8 (§2) and R6-13 → limitation X9 (§3
 ## Conventions
 
 - Every version ships with: updated `pyproject.toml`, `hades_booru/__init__.py`, README header, and launchers; full test suite green; `ruff` clean.
-- Post-release fixes land on `master` without a release and are recorded in the README "Release Notes" of the affected version.
+- Release notes live in `RELEASES.md` (newest first); the README links to it.
+- Post-release fixes land on `master` without a release and are recorded in `RELEASES.md` under the affected version.
