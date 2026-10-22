@@ -58,6 +58,7 @@ HaDeS-Booru/
 ├── requirements-dev.txt          # Dev dependencies (pytest, pytest-cov, ruff, mypy)
 ├── pyproject.toml                # Project metadata, Ruff, Pytest, and Mypy configuration
 ├── RELEASES.md                   # Version-by-version release notes, design decisions, and conventions (v1.0.0 -> latest)
+├── ROADMAP.md                    # Forward-looking plan: candidate Booru sources, accepted limitations, conventions
 ├── LICENSE                       # MIT license
 ├── hades_booru/                  # Core package
 │   ├── models.py                 # Pydantic v2 domain models
@@ -149,7 +150,8 @@ Useful options:
 
 ## Release Notes
 
-Full version-by-version history, design decisions, and release conventions: see [RELEASES.md](RELEASES.md).
+Full version-by-version history, design decisions, and release conventions: see [RELEASES.md](RELEASES.md).  
+Forward-looking plan, including the researched-but-not-yet-integrated Booru candidates: see [ROADMAP.md](ROADMAP.md).
 
 ## License
 
