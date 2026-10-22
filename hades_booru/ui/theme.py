@@ -156,6 +156,72 @@ def _palette_to_css_vars(p: dict[str, str]) -> str:
 THEME_APPLY_JS = """
 (mode) => {
     const m = (mode === 'light' || mode === 'dark') ? mode : 'system';
+
+    // Gradio 6.30 native component CSS variable overrides per theme.
+    // These map our design tokens to Gradio's internal variable names so that
+    // dropdowns, buttons, tabs, gallery, and all other native components
+    // follow the selected theme.
+    const GRADIO_VARS = {
+        dark: {
+            '--body-background-fill': '#090d16',
+            '--body-text-color': '#f8fafc',
+            '--body-text-color-subdued': '#94a3b8',
+            '--bg': '#090d16',
+            '--background-fill-primary': '#111827',
+            '--background-fill-secondary': '#1e293b',
+            '--block-background-fill': '#111827',
+            '--block-border-color': '#1f2937',
+            '--block-label-background-fill': '#111827',
+            '--block-label-border-color': '#1f2937',
+            '--block-label-text-color': '#94a3b8',
+            '--block-title-text-color': '#94a3b8',
+            '--block-info-text-color': '#94a3b8',
+            '--border-color-primary': '#1f2937',
+            '--border-color-accent': '#60a5fa',
+            '--border-color-accent-subdued': '#1d4ed8',
+            '--button-primary-background-fill': '#2563eb',
+            '--button-primary-text-color': '#ffffff',
+            '--button-secondary-background-fill': '#1e293b',
+            '--button-secondary-text-color': '#f8fafc',
+            '--slider-color': '#2563eb',
+            '--checkbox-background-color': '#1e293b',
+            '--table-even-background-fill': '#111827',
+            '--table-odd-background-fill': '#0f172a',
+            '--table-border-color': '#1f2937',
+            '--table-text-color': '#f8fafc',
+            '--accordion-text-color': '#f8fafc',
+        },
+        light: {
+            '--body-background-fill': '#f1f5f9',
+            '--body-text-color': '#0f172a',
+            '--body-text-color-subdued': '#475569',
+            '--bg': '#f1f5f9',
+            '--background-fill-primary': '#ffffff',
+            '--background-fill-secondary': '#f8fafc',
+            '--block-background-fill': '#ffffff',
+            '--block-border-color': '#cbd5e1',
+            '--block-label-background-fill': '#ffffff',
+            '--block-label-border-color': '#cbd5e1',
+            '--block-label-text-color': '#475569',
+            '--block-title-text-color': '#475569',
+            '--block-info-text-color': '#475569',
+            '--border-color-primary': '#cbd5e1',
+            '--border-color-accent': '#60a5fa',
+            '--border-color-accent-subdued': '#93c5fd',
+            '--button-primary-background-fill': '#1d4ed8',
+            '--button-primary-text-color': '#ffffff',
+            '--button-secondary-background-fill': '#e2e8f0',
+            '--button-secondary-text-color': '#0f172a',
+            '--slider-color': '#1d4ed8',
+            '--checkbox-background-color': '#ffffff',
+            '--table-even-background-fill': '#ffffff',
+            '--table-odd-background-fill': '#f8fafc',
+            '--table-border-color': '#cbd5e1',
+            '--table-text-color': '#0f172a',
+            '--accordion-text-color': '#0f172a',
+        },
+    };
+
     const applyMode = (mode) => {
         const mm = (mode === 'light' || mode === 'dark') ? mode : 'system';
         const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -166,7 +232,15 @@ THEME_APPLY_JS = """
             document.body.setAttribute('data-hb-theme', effective);
             document.body.classList.toggle('dark', effective === 'dark');
         }
+        // Override Gradio 6.30 native component variables
+        const gv = GRADIO_VARS[effective];
+        if (gv) {
+            for (const [prop, val] of Object.entries(gv)) {
+                document.documentElement.style.setProperty(prop, val);
+            }
+        }
     };
+
     applyMode(m);
     // R7-14: remember the selected mode and bind a singleton listener so a live
     // OS color-scheme change re-applies the theme while in "system" mode.
