@@ -17,5 +17,8 @@ config.local.json.bak-*
 .cache/
 *.zip
 exports/
+hades_booru/tag_dictionary/data/*.sqlite3*
+.coverage
+coverage.xml
 .DS_Store
 Thumbs.db

@@ -5,8 +5,8 @@ Supports DeviantArt (RSS), ArtStation (API v2), Pawoo (Mastodon API v1), E-Henta
 
 from __future__ import annotations
 
+import hashlib
 import re
-import time
 from html import unescape
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -79,7 +79,7 @@ class ArtPlatformsAdapter(BooruAdapter):
         posts: list[Post] = []
         item_re = re.compile(r"<item>([\s\S]*?)</item>", re.IGNORECASE)
 
-        for idx, match in enumerate(item_re.finditer(xml_text)):
+        for match in item_re.finditer(xml_text):
             if len(posts) >= limit:
                 break
             block = match.group(1)
@@ -112,9 +112,14 @@ class ArtPlatformsAdapter(BooruAdapter):
             unique_tags = list(dict.fromkeys(t for t in derived_tags if t))
             artist_tags = [author.lower().replace(" ", "_")] if author else []
 
+            # R7-10: deterministic ID derived from the post URL so the gallery
+            # cache (`source_id_id` key) hits on repeat fetches instead of
+            # rotating a timestamp-based ID on every search.
+            da_id_hash = hashlib.sha1(source_url.encode("utf-8")).hexdigest()[:16]
+
             posts.append(
                 Post(
-                    id=f"da_{int(time.time())}_{idx}",
+                    id=f"da_{da_id_hash}",
                     source_id="deviantart",
                     source_name="DeviantArt",
                     source_url=source_url,
@@ -168,7 +173,8 @@ class ArtPlatformsAdapter(BooruAdapter):
             title_words = [
                 w for w in re.sub(r"[^a-z0-9\s]", "", title.lower()).split() if len(w) > 2
             ]
-            user = item.get("user") if isinstance(item.get("user"), dict) else {}
+            user_raw = item.get("user")
+            user: dict[str, Any] = user_raw if isinstance(user_raw, dict) else {}
             artist_name = str(user.get("username") or user.get("full_name") or "")
             small_cover = str(item.get("smaller_square_cover_url") or "")
             if not small_cover:
@@ -248,13 +254,15 @@ class ArtPlatformsAdapter(BooruAdapter):
             if not preview_url:
                 continue
 
-            tag_objs = status.get("tags") if isinstance(status.get("tags"), list) else []
+            tag_objs_raw = status.get("tags")
+            tag_objs: list[Any] = tag_objs_raw if isinstance(tag_objs_raw, list) else []
             post_tags = [
                 str(t.get("name", "")).lower()
                 for t in tag_objs
                 if isinstance(t, dict) and t.get("name")
             ]
-            account = status.get("account") if isinstance(status.get("account"), dict) else {}
+            account_raw = status.get("account")
+            account: dict[str, Any] = account_raw if isinstance(account_raw, dict) else {}
             author = str(account.get("username") or account.get("display_name") or "") or None
             meta_orig: dict[str, Any] = (
                 (media.get("meta") or {}).get("original") or {}
@@ -329,8 +337,11 @@ class ArtPlatformsAdapter(BooruAdapter):
         all_tags = list(dict.fromkeys(t for t in [*keywords, *desc_words] if len(t) > 2))
         hostname = urlparse(url).hostname or "scraped"
 
+        # R7-10: deterministic ID from the source URL (cache-friendly).
+        scraped_id_hash = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+
         return Post(
-            id=f"scraped_{int(time.time())}",
+            id=f"scraped_{scraped_id_hash}",
             source_id=self.id,
             source_name=self.name,
             source_url=url,

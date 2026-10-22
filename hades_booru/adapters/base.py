@@ -4,7 +4,9 @@ Abstract Base Class for all Booru and Art Platform Adapters.
 
 from __future__ import annotations
 
+import math
 import threading
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
@@ -85,6 +87,86 @@ class BooruAdapter(ABC):
     @last_warning.setter
     def last_warning(self, value: str | None) -> None:
         _tls_set(self, "warnings", value)
+
+    def paginate(
+        self,
+        *,
+        limit: int,
+        max_limit: int,
+        max_page_size: int,
+        page_delay: float,
+        fetch_page: Callable[[int, int], Any],
+        map_item: Callable[[dict[str, Any]], Post | None],
+        progress_cb: ProgressCallback | None = None,
+        min_batch_size: int = 1,
+    ) -> list[Post]:
+        """Shared paginated search loop across all Booru adapters (audit R6-24).
+
+        Handles target count clamping, per-page progress reporting, ID deduplication,
+        early termination on partial/empty batches, inter-page rate-limit delay, and
+        thread-local `last_warning` population when pagination fails after page 1.
+
+        `min_batch_size` (R7-13, opt-in, default 1 = no behavior change): when the
+        server returns a short batch smaller than this floor before the target count
+        is reached, a truncation warning is surfaced in `last_warning` instead of
+        failing silently. A genuinely final short page above the floor stays quiet.
+        """
+        target_count = max(1, min(limit, max_limit))
+        page_size = min(max_page_size, target_count)
+        total_pages = math.ceil(target_count / page_size)
+
+        posts: list[Post] = []
+        seen_ids: set[str] = set()
+        self.last_warning = None
+
+        for page in range(1, total_pages + 1):
+            if progress_cb:
+                progress_cb(
+                    min(0.95, (page - 1) / max(1, total_pages)),
+                    f"Querying {self.name} (Page {page}/{total_pages})...",
+                )
+
+            try:
+                batch = fetch_page(page, page_size)
+                if not isinstance(batch, list) or not batch:
+                    break
+
+                for item in batch:
+                    if not isinstance(item, dict):
+                        continue
+                    mapped = map_item(item)
+                    if mapped and mapped.id not in seen_ids:
+                        seen_ids.add(mapped.id)
+                        posts.append(mapped)
+                        if len(posts) >= target_count:
+                            break
+
+                if len(posts) >= target_count:
+                    break
+                if len(batch) < page_size:
+                    # R7-13: opt-in floor — a very short batch before reaching the
+                    # target suggests the server capped the result set; flag it.
+                    if min_batch_size > 1 and len(batch) < min_batch_size:
+                        self.last_warning = (
+                            f"{self.name} returned fewer results than requested; "
+                            "the server may have truncated the result set"
+                        )
+                    break
+
+                if page < total_pages and page_delay > 0:
+                    time.sleep(page_delay)
+
+            except Exception as err:
+                if posts:
+                    # Surface the partial-result condition instead of failing silently.
+                    self.last_warning = f"pagination stopped early on page {page}: {err}"
+                    break
+                raise
+
+        if progress_cb:
+            progress_cb(1.0, f"Loaded {len(posts)} posts from {self.name}.")
+
+        return posts[:target_count]
 
     @abstractmethod
     def can_handle_url(self, url: str) -> bool:

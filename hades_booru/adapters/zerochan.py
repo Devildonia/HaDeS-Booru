@@ -5,9 +5,7 @@ Supports zerochan.net JSON endpoint (/?json) with listing URL tag extraction and
 
 from __future__ import annotations
 
-import math
 import re
-import time
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
@@ -76,7 +74,15 @@ class ZerochanAdapter(BooruAdapter):
         if not thumb and not large:
             return None
 
-        raw_tags = raw.get("tags") if isinstance(raw.get("tags"), list) else []
+        # R7-13: accept `tags` as a list OR a separator string (API shape varies);
+        # previously a string payload silently dropped every tag but the primary.
+        raw_tags_val = raw.get("tags")
+        if isinstance(raw_tags_val, list):
+            raw_tags = [str(x) for x in raw_tags_val]
+        elif isinstance(raw_tags_val, str):
+            raw_tags = [x.strip() for x in raw_tags_val.replace(",", " ").split() if x.strip()]
+        else:
+            raw_tags = []
         primary_tag = str(raw.get("tag") or "").strip()
         cleaned_tags: list[str] = []
         if primary_tag:
@@ -118,10 +124,6 @@ class ZerochanAdapter(BooruAdapter):
         progress_cb: ProgressCallback | None = None,
         rating: str | None = None,  # Zerochan has no rating query param; UI filters client-side.
     ) -> list[Post]:
-        target_count = max(1, min(limit, 200))
-        page_size = min(50, target_count)
-        total_pages = math.ceil(target_count / page_size)
-
         raw_query = tags.strip()
         if raw_query.startswith("http://") or raw_query.startswith("https://"):
             parsed_q = urlparse(raw_query)
@@ -131,62 +133,33 @@ class ZerochanAdapter(BooruAdapter):
             clean_tag = raw_query.replace("_", " ")
 
         encoded_path = f"/{quote(clean_tag)}" if clean_tag else "/"
+        url = f"https://{self.default_domain}{encoded_path}"
 
-        posts: list[Post] = []
-        seen_ids: set[str] = set()
-        self.last_warning = None
-
-        for page in range(1, total_pages + 1):
-            if progress_cb:
-                progress_cb(
-                    min(0.95, (page - 1) / max(1, total_pages)),
-                    f"Querying {self.name} (Page {page}/{total_pages})...",
-                )
-
-            url = f"https://{self.default_domain}{encoded_path}"
+        def _fetch_page(page: int, page_size: int) -> Any:
             params: dict[str, Any] = {
                 "json": "1",
                 "l": page_size,
                 "p": page,
             }
+            data = http_client.get_json(
+                url,
+                params=params,
+                headers={"User-Agent": "HaDeS_Booru_Client - Zerochan Reader"},
+            )
+            return data.get("items") if isinstance(data, dict) else []
 
-            try:
-                data = http_client.get_json(
-                    url,
-                    params=params,
-                    headers={"User-Agent": "HaDeS_Booru_Client - Zerochan Reader"},
-                )
-                batch = data.get("items") if isinstance(data, dict) else []
-                if not isinstance(batch, list) or not batch:
-                    break
-
-                for item in batch:
-                    if not isinstance(item, dict):
-                        continue
-                    mapped = self._map_post(item)
-                    if mapped and mapped.id not in seen_ids:
-                        seen_ids.add(mapped.id)
-                        posts.append(mapped)
-                        if len(posts) >= target_count:
-                            break
-
-                if len(batch) < page_size or len(posts) >= target_count:
-                    break
-
-                if page < total_pages:
-                    time.sleep(0.3)
-
-            except Exception as err:
-                if posts:
-                    # Surface the partial-result condition instead of failing silently.
-                    self.last_warning = f"pagination stopped early on page {page}: {err}"
-                    break
-                raise
-
-        if progress_cb:
-            progress_cb(1.0, f"Loaded {len(posts)} posts from {self.name}.")
-
-        return posts[:target_count]
+        return self.paginate(
+            limit=limit,
+            max_limit=200,
+            max_page_size=50,
+            page_delay=0.3,
+            fetch_page=_fetch_page,
+            map_item=self._map_post,
+            progress_cb=progress_cb,
+            # R7-13: zerochan historically caps result sets; flag suspicious
+            # short batches (below half a page) instead of truncating silently.
+            min_batch_size=25,
+        )
 
     def fetch_single_by_url(self, url: str) -> Post:
         post_id = extract_zerochan_post_id(url)

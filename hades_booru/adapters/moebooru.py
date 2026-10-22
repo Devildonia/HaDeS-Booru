@@ -5,9 +5,7 @@ Supports konachan.com, konachan.net, yande.re, sakugabooru.com, and lolibooru.mo
 
 from __future__ import annotations
 
-import math
 import re
-import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -22,6 +20,15 @@ SERVER_RATING_TAGS: dict[str, str] = {
     "q": "rating:questionable",
     "e": "rating:explicit",
 }
+
+
+def _safe_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _normalize_rating(raw: str | None) -> Rating:
@@ -92,7 +99,7 @@ class MoebooruAdapter(BooruAdapter):
             tags=CategorizedTags(general=general, meta=meta),
             raw_tags=raw_tags,
             author=str(raw.get("author") or "") or None,
-            score=int(raw.get("score")) if raw.get("score") is not None else None,
+            score=_safe_int(raw.get("score")),
         )
 
     def search(
@@ -102,66 +109,28 @@ class MoebooruAdapter(BooruAdapter):
         progress_cb: ProgressCallback | None = None,
         rating: str | None = None,
     ) -> list[Post]:
-        target_count = max(1, min(limit, 500))
-        page_size = min(100, target_count)
-        total_pages = math.ceil(target_count / page_size)
         clean_tags = " ".join(tags.strip().split())
         rating_tag = SERVER_RATING_TAGS.get(rating or "")
         if rating_tag:
             clean_tags = f"{clean_tags} {rating_tag}".strip()
         self.server_rating_applied = bool(rating_tag)
+        url = f"https://{self.default_domain}/post.json"
 
-        posts: list[Post] = []
-        seen_ids: set[str] = set()
-        self.last_warning = None
-
-        for page in range(1, total_pages + 1):
-            if progress_cb:
-                progress_cb(
-                    min(0.95, (page - 1) / max(1, total_pages)),
-                    f"Querying {self.name} (Page {page}/{total_pages})...",
-                )
-
-            url = f"https://{self.default_domain}/post.json"
-            params: dict[str, Any] = {
-                "limit": page_size,
-                "page": page,
-            }
+        def _fetch_page(page: int, page_size: int) -> Any:
+            params: dict[str, Any] = {"limit": page_size, "page": page}
             if clean_tags:
                 params["tags"] = clean_tags
+            return http_client.get_json(url, params=params)
 
-            try:
-                batch = http_client.get_json(url, params=params)
-                if not isinstance(batch, list) or not batch:
-                    break
-
-                for item in batch:
-                    if not isinstance(item, dict):
-                        continue
-                    mapped = self._map_post(item)
-                    if mapped and mapped.id not in seen_ids:
-                        seen_ids.add(mapped.id)
-                        posts.append(mapped)
-                        if len(posts) >= target_count:
-                            break
-
-                if len(batch) < page_size or len(posts) >= target_count:
-                    break
-
-                if page < total_pages:
-                    time.sleep(0.18)
-
-            except Exception as err:
-                if posts:
-                    # Surface the partial-result condition instead of failing silently.
-                    self.last_warning = f"pagination stopped early on page {page}: {err}"
-                    break
-                raise
-
-        if progress_cb:
-            progress_cb(1.0, f"Loaded {len(posts)} posts from {self.name}.")
-
-        return posts[:target_count]
+        return self.paginate(
+            limit=limit,
+            max_limit=500,
+            max_page_size=100,
+            page_delay=0.18,
+            fetch_page=_fetch_page,
+            map_item=self._map_post,
+            progress_cb=progress_cb,
+        )
 
     def fetch_single_by_url(self, url: str) -> Post:
         parsed = urlparse(url)

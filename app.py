@@ -13,8 +13,19 @@ Port behaviour (v1.0.6):
 from __future__ import annotations
 
 import argparse
+import os
 import socket
 from pathlib import Path
+
+# v1.1.0: HaDeS Booru always disables Gradio telemetry (product decision),
+# set before any gradio import because layout.py pulls it in.
+# 1. Privacy: local-first tool, no pings to api.gradio.app.
+# 2. Gradio 6.30 bug: with analytics on, launch() crashes comparing themes
+#    (Font.__eq__ AttributeError on mixed str/LocalFont font lists).
+#    Honored by gradio.analytics.analytics_enabled(); harmless on Gradio
+#    builds without the telemetry feature. layout.py also passes
+#    analytics_enabled=False explicitly when the parameter exists.
+os.environ["GRADIO_ANALYTICS_ENABLED"] = "false"
 
 from hades_booru.ui.layout import create_gradio_app
 from hades_booru.ui.theme import CUSTOM_CSS, create_hades_theme
@@ -79,7 +90,7 @@ def main() -> None:
     if chosen_port != args.port:
         print(f"[HaDeS] Port {args.port} is busy — automatically using {chosen_port} instead.")
 
-    app = create_gradio_app()
+    app = create_gradio_app(share_mode=args.share)
     try:
         app.launch(
             server_name=args.host,

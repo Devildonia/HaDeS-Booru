@@ -5,6 +5,27 @@ Current version, features, and quick start: see [README](README.md).
 
 ---
 
+## v1.1.0
+
+**Major feature & architectural release** — closes every item on the v1.1.0 roadmap: offline SQLite Tag Dictionary, selectable Light/Dark/System theme with locally bundled fonts, per-session personal lists under `--share`, 3-layer DAPI tag categorization, shared adapter pagination (`R6-24`), modular UI package split (`R6-25`), and CI hardening (`R6-08`).
+
+**New Features**
+
+- **Offline Tag Dictionary (§1)**: new `hades_booru/tag_dictionary/` package backed by a local SQLite catalog (`tags.sqlite3`, auto-seeded on first query with 85+ curated Danbooru entries and 40+ common aliases, gitignored) plus a standalone CLI importer (`python -m hades_booru.tag_dictionary.importer`) to fetch expanded tag/alias/wiki catalogs from the Danbooru API without blocking app startup. Exact-match and alias lookups (`miku` -> `hatsune_miku`, `1_girl` -> `1girl`) resolve in sub-millisecond time. Bilingual support follows strict rules: original English definitions are always stored as-is, and Spanish definitions are shown only when a genuine translation exists (never auto-translated). Exposed in a new **Tag Dictionary** (`Diccionario de Tags`) tab with quick-tag chips and Danbooru wiki links.
+- **Selectable Light / Dark / System Theme & Offline Fonts (§4, R6-17)**: added `ThemeMode` (`dark`, `light`, `system`) to `AppConfig`, persisted in `config.local.json` and switchable live from the top bar. Both Dark (`#0B0D13` canvas) and Light (`#F8FAFC` canvas) palettes are defined via semantic CSS custom properties with verified WCAG AA contrast ($\ge 4.5:1$) across all text tokens and category badges. `System (Auto)` honors `prefers-color-scheme` on load and reacts live to OS theme switches. `Inter` and `JetBrains Mono` WOFF2 fonts (plus `OFL.txt`) are bundled locally under `hades_booru/ui/assets/fonts/` and served via `@font-face` data URIs, eliminating external `fonts.googleapis.com` requests.
+- **Per-Session Personal Lists under `--share` (§2 / X8 / R6-12)**: new `SessionLists` and `PersonalListStore` in `hades_booru/ui/state.py`. When launched with `python app.py --share`, personal blacklist, whitelist, and default junk overrides live exclusively in per-session `gr.State` so remote visitors cannot see or mutate the host's `config.local.json` or each other's lists. Local (non-share) mode preserves full disk persistence.
+- **3-Layer DAPI Tag Categorization (§3 / X9 / R6-13)**: `GelbooruAdapter._categorize_dapi_tags` now classifies flat Gelbooru/DAPI tags through three layers:
+  1. Expanded suffix heuristics with explicit general exemptions (`_(color)`, `_(pose)`, `_(position)`, `_(style)`, `_(clothing)`, `_(attire)`, `_(outfit)`, `_(expression)`, `_(emotion)`, `_(object)`, `_(weapon)`, `_(food)`, `_(vehicle)`, `_(animal)`, `_(creature)`, `_(background)`, `_(lighting)`, `_(framing)`, `_(focus)`, `_(count)`, `_(meme)`, `_(parody)`, `_(voice_actor)`, `_(seiyuu)`), `_(artist)` / `drawn_by_*` -> `artist`, and franchise suffixes -> `copyright`.
+  2. Single-query SQLite batch lookup (`TagDictionaryService.batch_categories`) for non-parenthesized `artist`, `copyright`, and `character` tags.
+  3. Optional thread-safe LRU cache (`DapiTagCategoryCache`) for the DAPI `s=tag&q=index` endpoint.
+
+**Architecture & CI Hardening**
+
+- **Shared Adapter Pagination (`R6-24`)**: extracted `BooruAdapter.paginate()` into `hades_booru/adapters/base.py`, removing 6 duplicated pagination loops across `danbooru`, `gelbooru`, `e621`, `moebooru`, `philomena`, and `zerochan` while preserving each family's specific stop condition and partial-result warning behavior.
+- **Modular UI Package (`R6-25`)**: split `hades_booru/ui/layout.py` into focused modules (`state.py`, `desktop.py`, `handlers.py`, `layout.py`, `components.py`, `theme.py`) and removed hardcoded inline hex colors from `components.py` in favor of semantic CSS classes.
+- **CI Hardening (`R6-08`)**: `.github/workflows/ci.yml` now pins GitHub Actions to full commit SHAs (`actions/checkout@11bd7190...`, `actions/setup-python@a26af69b...`), adds Python `3.13` to the OS/version matrix, adds dedicated `mypy` typecheck and `pytest-cov` (`--cov-fail-under=80`) jobs, and runs `pip-audit` on a weekly cron schedule (`0 6 * * 1`).
+- **Tests**: 22 new tests across 5 new test modules (`test_paginate_refactor.py`, `test_tag_dictionary.py`, `test_session_personal_lists.py`, `test_dapi_categorization.py`, `test_theme_and_ui_overhaul.py`). **165 tests, all green; `ruff` clean.**
+
 ## v1.0.7
 
 **Post-release audit (R6) hardening** — the most exhaustive audit of the codebase so far (static analysis, real-browser E2E, dependency audit, coverage). 1 High + 6 Medium + 20 Low findings; all High/Medium and the practical Lows are fixed here, the rest is recorded in [ROADMAP.md](ROADMAP.md).

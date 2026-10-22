@@ -2,11 +2,12 @@
 Shared HTTP mocks for the streaming-based HttpClient (audit R6-20).
 
 `HttpClient.get_text` / `download_bytes` now read bodies via
-`client.stream(...)` + `response.iter_raw(...)`. A pre-constructed
-`httpx.Response` is already marked as stream-consumed by `Response.__init__`,
-so `iter_raw()` would raise `StreamConsumed`. `make_streamable_response`
-re-arms the body as a fresh `httpx.ByteStream` so the mock behaves exactly
-like a real network response for the streaming read path.
+`client.stream(...)` + `response.iter_bytes(...)` (Content-Encoding aware).
+A pre-constructed `httpx.Response` is already marked as stream-consumed by
+`Response.__init__`, so `iter_bytes()` would raise `StreamConsumed`.
+`make_streamable_response` re-arms the body as a fresh `httpx.ByteStream`
+so the mock behaves exactly like a real network response for the streaming
+read path, including gzip/deflate decoding driven by the response headers.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ def make_streamable_response(
     content: bytes | None = None,
     text: str | None = None,
 ) -> httpx.Response:
-    """Builds a pre-constructed httpx.Response whose body is readable via `iter_raw()`."""
+    """Builds a pre-constructed httpx.Response whose body is readable via `iter_bytes()`."""
     resp = httpx.Response(
         status_code,
         headers=headers,

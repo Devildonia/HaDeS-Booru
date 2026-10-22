@@ -9,6 +9,7 @@ from __future__ import annotations
 import concurrent.futures
 import hashlib
 import logging
+import os
 import re
 import threading
 from pathlib import Path
@@ -103,7 +104,12 @@ class DiskImageCache:
                     continue
                 target = self._dir / f"{key}{ext}"
                 with self._lock:
-                    target.write_bytes(raw_bytes)
+                    # R7-09: atomic write (temp file + os.replace) so a crash or
+                    # concurrent prune mid-write can never leave a truncated
+                    # file that later reads as a "valid" cached image.
+                    tmp = target.with_name(f"{target.name}.part")
+                    tmp.write_bytes(raw_bytes)
+                    os.replace(tmp, target)
                 return str(target.resolve()), caption
             except Exception as err:
                 # Never crash the gallery over one bad image: log for diagnostics and

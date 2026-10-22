@@ -1,7 +1,8 @@
 """
 HTML Component Renderers for HaDeS Booru Gradio UI.
 Generates escaped, localized HTML snippets for the header bar, inline status indicator,
-inspector navigation badge, scrollable taxonomic post inspector, and dataset metrics.
+inspector navigation badge, scrollable taxonomic post inspector, tag dictionary card,
+and dataset metrics using semantic CSS classes (zero hardcoded inline theme colors).
 """
 
 from __future__ import annotations
@@ -11,18 +12,28 @@ import html
 import re
 from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 
 from hades_booru import __version__
 from hades_booru.i18n import t
-from hades_booru.models import ExtractedImageMeta, Post
+from hades_booru.models import ExtractedImageMeta, Language, Post
 from hades_booru.normalizer import PromptNormalizer, normalize_tag_key, parse_tag_list
+from hades_booru.tag_dictionary.service import TagRecord
 
-RATING_COLORS: dict[str, str] = {
-    "g": "#10b981",
-    "s": "#f59e0b",
-    "q": "#f97316",
-    "e": "#ef4444",
-    "u": "#64748b",
+RATING_CLASSES: dict[str, str] = {
+    "g": "hades-rating-g",
+    "s": "hades-rating-s",
+    "q": "hades-rating-q",
+    "e": "hades-rating-e",
+    "u": "hades-rating-u",
+}
+
+CATEGORY_CHIP_CLASSES: dict[str, str] = {
+    "copyright": "tag-copyright",
+    "character": "tag-character",
+    "artist": "tag-artist",
+    "general": "tag-general",
+    "meta": "tag-meta",
 }
 
 STATUS_DOT_COLORS: dict[str, str] = {
@@ -80,9 +91,9 @@ def render_header_html(lang: str = "en") -> str:
           <p class="hades-subtitle">{subtitle}</p>
         </div>
       </div>
-      <div style="font-size: 0.74rem; color: #94a3b8; text-align: right;">
+      <div class="hades-header-meta">
         <div>{meta_1}</div>
-        <div style="color: #60a5fa; font-size: 0.7rem;">{meta_2}</div>
+        <div class="hades-header-meta-accent">{meta_2}</div>
       </div>
     </div>
     """
@@ -110,15 +121,20 @@ def render_inspector_nav_badge_html(
     total: int,
     prompt_text: str,
     lang: str = "en",
+    separator: str = ", ",
 ) -> str:
-    """Renders the centered post position and CLIP token counter badge in the Inspector dock."""
+    """Renders the centered post position and CLIP token counter badge in the Inspector dock.
+
+    R7-11: tag/word counting respects the user's `custom_separator` (default ", ").
+    """
     if total <= 0 or not prompt_text.strip():
         text = html.escape(t(lang, "nav_badge_empty"))
         return f'<div class="hades-nav-badge">{text}</div>'
 
-    tags_list = [x.strip() for x in prompt_text.split(",") if x.strip()]
+    sep = separator if separator.strip() else ", "
+    tags_list = [x.strip() for x in prompt_text.split(sep) if x.strip()]
     tag_count = len(tags_list)
-    word_count = len(prompt_text.replace(",", " ").split())
+    word_count = len(prompt_text.replace(sep, " ").split())
     est_tokens = max(tag_count, round(word_count * 1.35))
     display_idx = max(1, min(total, index + 1))
 
@@ -188,18 +204,14 @@ def render_extract_result_html(
     normalizer: PromptNormalizer,
     lang: str = "en",
 ) -> str:
-    """Renders the extracted positive tags (through the active normalizer) as chips.
-
-    Negative-prompt tags live in their own box; chips represent the positive
-    prompt that would be used for training.
-    """
+    """Renders the extracted positive tags (through the active normalizer) as chips."""
     chips: list[str] = []
     for raw in parse_tag_list(meta.prompt or ""):
         clean = normalizer.sanitize_tag(raw)
         if clean is None:
             suffix = html.escape(t(lang, "inspector_filtered_suffix"))
             chips.append(
-                f'<span class="tag-chip tag-general" style="opacity: 0.45; text-decoration: line-through;">'
+                f'<span class="tag-chip tag-general tag-chip-filtered">'
                 f"{html.escape(raw)} {suffix}</span>"
             )
         else:
@@ -229,7 +241,7 @@ def render_post_inspector_html(
 
     rating_key = f"rating_{post.rating}" if post.rating in ("g", "s", "q", "e") else "rating_u"
     rating_text = t(lang, rating_key)
-    rating_color = RATING_COLORS.get(post.rating, RATING_COLORS["u"])
+    rating_cls = RATING_CLASSES.get(post.rating, RATING_CLASSES["u"])
     dims = f"{post.width} x {post.height} px" if post.width and post.height else "N/A"
     safe_url = html.escape(post.source_url, quote=True)
     # Audit R6-10: only http(s) targets may be clickable — a remote JSON payload
@@ -262,9 +274,9 @@ def render_post_inspector_html(
         for raw_t in tag_list:
             clean_t = normalizer.sanitize_tag(raw_t)
             display_t = clean_t if clean_t is not None else f"{raw_t} {filtered_suffix}"
-            opacity = "1.0" if clean_t is not None else "0.45; text-decoration: line-through"
+            extra_cls = "" if clean_t is not None else " tag-chip-filtered"
             chips.append(
-                f'<span class="tag-chip {css_class}" style="opacity: {opacity};">{html.escape(display_t)}</span>'
+                f'<span class="tag-chip {css_class}{extra_cls}">{html.escape(display_t)}</span>'
             )
         sections_html.append(
             f'<div class="tag-section-title">{html.escape(label)} ({len(tag_list)})</div>'
@@ -274,11 +286,7 @@ def render_post_inspector_html(
     derived_html = ""
     if post.source_id in ("deviantart", "artstation", "pawoo", "ehentai", "generic"):
         notice_txt = html.escape(t(lang, "inspector_derived_notice"))
-        derived_html = (
-            f'<div style="font-size: 0.72rem; color: #f59e0b; background: rgba(245, 158, 11, 0.1); '
-            f'border: 1px solid rgba(245, 158, 11, 0.28); border-radius: 5px; padding: 6px 10px; margin-bottom: 10px;">'
-            f"{notice_txt}</div>"
-        )
+        derived_html = f'<div class="hades-derived-notice">{notice_txt}</div>'
 
     return f"""
     <div class="hades-inspector-scroll">
@@ -289,7 +297,7 @@ def render_post_inspector_html(
         </div>
         <div class="meta-box">
           <strong>{lbl_rating}</strong>
-          <span style="color: {rating_color}; font-weight: 600;">{html.escape(rating_text)}</span>
+          <span class="{rating_cls}">{html.escape(rating_text)}</span>
         </div>
         <div class="meta-box">
           <strong>{lbl_res}</strong>
@@ -297,11 +305,103 @@ def render_post_inspector_html(
         </div>
         <div class="meta-box">
           <strong>{lbl_link}</strong>
-          <a href="{safe_url}" target="_blank" rel="noopener noreferrer" style="color: #60a5fa; text-decoration: underline;">{lbl_open}</a>
+          <a href="{safe_url}" target="_blank" rel="noopener noreferrer" class="hades-link">{lbl_open}</a>
         </div>
       </div>
       {derived_html}
       {"".join(sections_html)}
+    </div>
+    """
+
+
+def render_tag_dictionary_html(
+    record: TagRecord | None,
+    query: str = "",
+    lang: str = "en",
+) -> str:
+    """Renders the offline Tag Dictionary result card (v1.1.0)."""
+    clean_q = (query or "").strip()
+    if record is None:
+        if not clean_q:
+            title = html.escape(t(lang, "dict_empty_title"))
+            desc = html.escape(t(lang, "dict_empty_desc"))
+        else:
+            title = html.escape(t(lang, "dict_not_found_title"))
+            desc = html.escape(t(lang, "dict_not_found_desc", query=clean_q))
+        return f"""
+        <div class="hades-dict-card">
+          <div class="hades-empty-state">
+            <p class="hades-empty-title">{title}</p>
+            <p class="hades-empty-desc">{desc}</p>
+          </div>
+        </div>
+        """
+
+    eff_lang: Language = cast(Language, "es" if lang == "es" else "en")
+    body_text, is_fallback_en = record.definition_for(eff_lang)
+    if not body_text:
+        body_text = t(lang, "dict_no_definition")
+
+    cat_label = html.escape(t(lang, f"cat_{record.category}"))
+    chip_cls = CATEGORY_CHIP_CLASSES.get(record.category, "tag-general")
+    safe_name = html.escape(record.name)
+    safe_wiki = html.escape(record.wiki_url, quote=True)
+    if not re.match(r"^https?://", record.wiki_url, re.IGNORECASE):
+        safe_wiki = "#"
+
+    resolved_html = ""
+    if record.resolved_from:
+        resolved_txt = html.escape(
+            t(lang, "dict_resolved_alias", alias=record.resolved_from, canonical=record.name)
+        )
+        resolved_html = f'<div class="hades-derived-notice">{resolved_txt}</div>'
+
+    fallback_html = ""
+    if is_fallback_en:
+        fb_txt = html.escape(t(lang, "dict_fallback_en_notice"))
+        fallback_html = f'<div class="hades-derived-notice">{fb_txt}</div>'
+
+    if record.aliases:
+        alias_chips = " ".join(
+            f'<span class="tag-chip tag-meta">{html.escape(a)}</span>' for a in record.aliases
+        )
+        aliases_block = f'<div class="tag-cloud">{alias_chips}</div>'
+    else:
+        aliases_block = (
+            f'<div class="hades-subtitle">{html.escape(t(lang, "dict_no_aliases"))}</div>'
+        )
+
+    lbl_cat = html.escape(t(lang, "dict_category"))
+    lbl_posts = html.escape(t(lang, "dict_post_count"))
+    lbl_wiki = html.escape(t(lang, "dict_wiki_link_label"))
+    lbl_wiki_open = html.escape(t(lang, "dict_wiki_open"))
+    lbl_aliases = html.escape(t(lang, "dict_aliases_label"))
+
+    return f"""
+    <div class="hades-dict-card">
+      {resolved_html}
+      <div class="meta-grid-4">
+        <div class="meta-box">
+          <strong>TAG</strong>
+          <span class="tag-chip {chip_cls}">{safe_name}</span>
+        </div>
+        <div class="meta-box">
+          <strong>{lbl_cat}</strong>
+          {cat_label}
+        </div>
+        <div class="meta-box">
+          <strong>{lbl_posts}</strong>
+          {record.post_count:,}
+        </div>
+        <div class="meta-box">
+          <strong>{lbl_wiki}</strong>
+          <a href="{safe_wiki}" target="_blank" rel="noopener noreferrer" class="hades-link">{lbl_wiki_open}</a>
+        </div>
+      </div>
+      {fallback_html}
+      <div class="hades-dict-body">{html.escape(body_text)}</div>
+      <div class="tag-section-title">{lbl_aliases} ({len(record.aliases)})</div>
+      {aliases_block}
     </div>
     """
 
@@ -311,15 +411,20 @@ def render_export_stats_html(
     export_text: str,
     mode: str,
     lang: str = "en",
+    separator: str = ", ",
 ) -> str:
-    """Renders live dataset metrics in the Batch Export tab."""
+    """Renders live dataset metrics in the Batch Export tab.
+
+    R7-11: unique-tag counting respects the user's `custom_separator` (default ", ").
+    """
     post_count = len(posts)
     char_count = len(export_text)
     lines = [ln for ln in export_text.splitlines() if ln.strip() and not ln.strip().startswith("#")]
     line_count = len(lines)
+    sep = separator if separator.strip() else ", "
     unique_tags: set[str] = set()
     for ln in lines:
-        for tag in ln.split(","):
+        for tag in ln.split(sep):
             if tag.strip():
                 unique_tags.add(tag.strip().lower())
 
@@ -331,7 +436,7 @@ def render_export_stats_html(
     val_unique = html.escape(t(lang, "stats_unique_val", tags=len(unique_tags), chars=f"{char_count:,}"))
 
     return f"""
-    <div class="meta-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 12px;">
+    <div class="meta-grid-4">
       <div class="meta-box"><strong>{lbl_posts}</strong>{val_posts}</div>
       <div class="meta-box"><strong>{lbl_mode}</strong>{html.escape(mode.upper())}</div>
       <div class="meta-box"><strong>{lbl_lines}</strong>{line_count}</div>

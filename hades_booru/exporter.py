@@ -93,8 +93,10 @@ def looks_like_image(data: bytes) -> bool:
 
     A `200 text/html` error page served from a `.jpg` URL must not be cached as an
     image — this check is the gate before anything is written to the gallery cache.
+    R7-09: AVIF is accepted here too, matching `BROWSER_SAFE_EXTS` so AVIF files
+    are no longer rejected at the gate and rendered as a placeholder.
     """
-    return _magic_ext(data) in (".png", ".jpg", ".gif", ".webp")
+    return _magic_ext(data) in (".png", ".jpg", ".gif", ".webp", ".avif")
 
 
 def guess_media_extension(url: str, content_type: str = "", data: bytes = b"") -> str:

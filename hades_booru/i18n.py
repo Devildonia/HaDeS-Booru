@@ -185,6 +185,36 @@ TRANSLATIONS: dict[Language, dict[str, str]] = {
         "creds_saved_msg": "Credentials saved to config.local.json (0600).",
         "creds_saved_session_msg": "Credentials active in memory for this session only (stripped from disk).",
         "creds_cleared_msg": "All saved API credentials have been cleared from memory and disk.",
+        "creds_share_disabled": "In public share mode, saving and clearing API credentials is disabled to protect the host machine. Run HaDeS Booru locally to manage credentials.",
+        "export_folder_share_disabled": "Exporting to a local folder is disabled in public share mode (it would write to the host machine). Use the ZIP file download instead.",
+        # v1.1.0: Theme picker & per-session personal lists notice
+        "theme_label": "Theme",
+        "theme_system": "System (Auto)",
+        "theme_dark": "Dark",
+        "theme_light": "Light",
+        "personal_share_mode_notice": "Public share mode active: personal blacklist, whitelist, and excluded tag edits are isolated to your browser session in memory and never overwrite the host's config.local.json.",
+        # v1.1.0: Tag Dictionary tab
+        "tab_dictionary": "Tag Dictionary",
+        "dict_heading": "Offline Danbooru Tag Dictionary",
+        "dict_subheading": "Instant offline lookup of canonical Danbooru tag definitions, categories, and aliases. Original English wiki definitions are shown as-is; Spanish translations appear only when a genuine translation is stored.",
+        "dict_query_label": "Tag or Alias",
+        "dict_query_placeholder": "e.g. 1girl, hatsune_miku, miku, fgo, serafuku, cowboy_shot",
+        "dict_search_btn": "Look Up Tag",
+        "dict_use_tag_btn": "Add Canonical Tag to Search",
+        "dict_empty_title": "Search the Local Tag Catalog",
+        "dict_empty_desc": "Enter a tag name or alias above to inspect its canonical Danbooru category, post count, known aliases, and definition.",
+        "dict_not_found_title": "Tag Not Found in Local Catalog",
+        "dict_not_found_desc": "No entry or alias matched '{query}' in the local SQLite catalog. You can still search it on the boards or expand the catalog with python -m hades_booru.tag_dictionary.importer.",
+        "dict_resolved_alias": "Resolved from alias: {alias} -> {canonical}",
+        "dict_post_count": "Approx. Posts",
+        "dict_category": "Category",
+        "dict_aliases_label": "Known Aliases",
+        "dict_no_aliases": "No registered aliases in local catalog.",
+        "dict_wiki_link_label": "Danbooru Wiki",
+        "dict_wiki_open": "Open official wiki page",
+        "dict_fallback_en_notice": "Showing original English definition (no official Spanish translation is stored for this entry).",
+        "dict_no_definition": "No wiki definition text is stored for this tag yet.",
+        "dict_added_to_search": "Added '{tag}' to the search bar.",
     },
     "es": {
         # Header
@@ -361,6 +391,36 @@ TRANSLATIONS: dict[Language, dict[str, str]] = {
         "creds_saved_msg": "Credenciales guardadas en config.local.json (0600).",
         "creds_saved_session_msg": "Credenciales activas solo en memoria para esta sesión (borradas de disco).",
         "creds_cleared_msg": "Todas las credenciales API guardadas han sido borradas de memoria y disco.",
+        "creds_share_disabled": "En modo de compartición pública, guardar y borrar credenciales API está desactivado para proteger el equipo anfitrión. Ejecuta HaDeS Booru en local para gestionar credenciales.",
+        "export_folder_share_disabled": "La exportación a una carpeta local está desactivada en modo de compartición pública (escribiría en el equipo anfitrión). Usa la descarga del archivo ZIP en su lugar.",
+        # v1.1.0: Selector de tema y aviso de listas por sesión
+        "theme_label": "Tema",
+        "theme_system": "Sistema (Auto)",
+        "theme_dark": "Oscuro",
+        "theme_light": "Claro",
+        "personal_share_mode_notice": "Modo compartido público activo: los cambios en blacklist, whitelist y tags excluidos están aislados en la memoria de tu sesión y nunca modifican el config.local.json del anfitrión.",
+        # v1.1.0: Pestaña Diccionario de Tags
+        "tab_dictionary": "Diccionario de Tags",
+        "dict_heading": "Diccionario Local de Tags de Danbooru",
+        "dict_subheading": "Consulta instantánea sin conexión de definiciones canónicas, categorías y alias de Danbooru. Las definiciones originales en inglés se muestran tal cual; las traducciones al español solo se muestran cuando existe una traducción genuina verificada.",
+        "dict_query_label": "Tag o Alias",
+        "dict_query_placeholder": "ej. 1girl, hatsune_miku, miku, fgo, serafuku, cowboy_shot",
+        "dict_search_btn": "Consultar Tag",
+        "dict_use_tag_btn": "Añadir Tag Canónico a Búsqueda",
+        "dict_empty_title": "Consulta el Catálogo Local de Tags",
+        "dict_empty_desc": "Introduce un nombre de tag o alias arriba para ver su categoría canónica en Danbooru, volumen de posts, alias conocidos y definición.",
+        "dict_not_found_title": "Tag No Encontrado en el Catálogo Local",
+        "dict_not_found_desc": "Ninguna entrada o alias coincide con '{query}' en el catálogo SQLite local. Puedes buscarlo igualmente en los servidores o ampliar el catálogo con python -m hades_booru.tag_dictionary.importer.",
+        "dict_resolved_alias": "Resuelto desde el alias: {alias} -> {canonical}",
+        "dict_post_count": "Posts Aprox.",
+        "dict_category": "Categoría",
+        "dict_aliases_label": "Alias Conocidos",
+        "dict_no_aliases": "Sin alias registrados en el catálogo local.",
+        "dict_wiki_link_label": "Wiki de Danbooru",
+        "dict_wiki_open": "Abrir página oficial de la wiki",
+        "dict_fallback_en_notice": "Mostrando definición original en inglés (no hay traducción oficial en español almacenada para esta entrada).",
+        "dict_no_definition": "Aún no hay texto de definición wiki almacenado para este tag.",
+        "dict_added_to_search": "Añadido '{tag}' a la barra de búsqueda.",
     },
 }
 
@@ -416,4 +476,13 @@ def get_exclude_category_choices(lang: str) -> list[tuple[str, str]]:
         (t(lang, "excl_character"), "character"),
         (t(lang, "excl_artist"), "artist"),
         (t(lang, "excl_meta"), "meta"),
+    ]
+
+
+def get_theme_choices(lang: str) -> list[tuple[str, str]]:
+    """Returns localized choices for the selectable theme mode dropdown (v1.1.0)."""
+    return [
+        (t(lang, "theme_system"), "system"),
+        (t(lang, "theme_dark"), "dark"),
+        (t(lang, "theme_light"), "light"),
     ]

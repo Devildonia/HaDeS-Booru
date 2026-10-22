@@ -1,11 +1,12 @@
 # Roadmap
 
-Status of deferred work, recorded as of v1.0.7 + post-release audit R6 hardening (October 2026).
+Status of shipped milestones and architectural conventions, updated as of v1.1.0 (October 2026).
 
-## v1.0.x — Shipped
+## Shipped Milestones
 
 | Version | Highlights |
 |---|---|
+| v1.1.0 | Offline SQLite Tag Dictionary (`hades_booru/tag_dictionary/`) + CLI importer, selectable Dark/Light/System theme (WCAG AA >= 4.5:1) with locally bundled Inter & JetBrains Mono WOFF2 fonts (`R6-17`), per-session personal lists under `--share` (`X8` / `R6-12`), 3-layer DAPI tag categorization (`X9` / `R6-13`), shared `BooruAdapter.paginate()` (`R6-24`), modular UI split (`R6-25`), CI hardening (`R6-08`), Gradio 6.30 compatibility (telemetry off, gzip `iter_bytes`, Cloudflare challenge detection), command-deck stretch fix, 206 tests |
 | v1.0.7 | Audit R6 hardening: Danbooru credential-leak host matching (High), SSRF guard, history/cache/config hardening, dependency audit (certifi, documented Pillow pin), 143 tests |
 | v1.0.6 | Search history + top tags panel, default port 7863 with auto-fallback probe, drop-to-replace in Image to Prompt, pre-release audit hardening |
 | v1.0.5 | Gallery Next/Prev selection fix, "Personal Tag List" renamed to "Blacklist" |
@@ -13,81 +14,13 @@ Status of deferred work, recorded as of v1.0.7 + post-release audit R6 hardening
 | v1.0.3 | Personal tag blacklist/whitelist + Image to Prompt |
 | v1.0.0–v1.0.2 | Core release cycle |
 
-## v1.1.0 — Planned (major)
+## Known Intentional Design Decisions
 
-### 1. Tag Dictionary (flagship feature)
-
-Local dictionary of Danbooru tag definitions with offline lookup.
-
-- **Module layout** (`hades_booru/tag_dictionary/`):
-  - `__init__.py` — public interface
-  - `service.py` — exact-match search and alias resolution
-  - `importer.py` — one-off catalog import/update (downloads tag list, aliases, and wiki definitions from the Danbooru API; never runs inside the app at startup)
-  - `data/tags.sqlite3` — local SQLite catalog (gitignored)
-- **Behavior**:
-  - Exact tag search returns the stored definition in milliseconds, fully offline after import.
-  - Alias resolution: searching an alias returns the canonical tag and its definition.
-  - Bilingual: original (EN) definition stored as-is; Spanish translation stored only when a genuine translation is available — never auto-translated and presented as official.
-- **UI**: new "Tag Dictionary" tab — search field, category, definition, aliases, and a source link back to the Danbooru wiki page.
-- **Tests**: existing tags, aliases, unknown entries, special characters, both languages.
-- **Design constraint**: the Gradio layer consumes the service; dictionary logic stays out of the UI components.
-
-### 2. Per-session personal lists under `--share` (limitation X8)
-
-**Current state**: the Blacklist / whitelist / junk lists live in `config.local.json` (`AppConfig`) and are global. Fine for local single-user use, but with `gradio --share` every remote user sees and mutates the same lists.
-
-**Planned fix**:
-- When the app is launched with `--share`, keep personal lists in per-session `gr.State` (in-memory only).
-- In local (non-share) mode, keep the current disk-persisted behavior.
-- Rewire all Blacklist panel handlers to a session-scoped store with a local-disk fallback.
-
-**Effort**: medium (touches the whole Blacklist panel wiring). Deferred because ROI is low for the primary local workflow.
-
-### 3. Better DAPI tag categorization (limitation X9)
-
-**Current state**: Gelbooru/DAPI returns flat tags without categories, so the adapter guesses: `_(series)` → copyright, `_(cosplay)` → general, any `tag_(...)` → character, everything else → general. The `_(` → character rule is coarse (e.g. `red_(color)` is misfiled as character). This affects semantic ordering, category-based exclusion, and the Inspector view.
-
-**Planned fix (options)**:
-- Refine the suffix heuristics with explicit exemption lists (color, count, position, etc.).
-- Per-board tag-category resolution via the DAPI tags endpoint (extra latency per unique tag; cache aggressively).
-- No uniform guarantee is possible — document residual edge cases in the README.
-
-**Effort**: medium-large. Deferred to v1.1.0 where it can be designed alongside the importer/infrastructure work.
-
-### 4. UI overhaul — professional, clean, selectable light/dark theme
-
-**Current state**: the interface is functional and consistent, but the theme is dark-only (forced in v1.0.7 — the custom palette only defined dark variants and light mode left section headers nearly invisible, contrast 1.05:1), fonts are fetched from Google Fonts (R6-17), and visual polish is uneven across panels (nav badge, status boxes, tab styling).
-
-**Planned work**:
-- Design pass: spacing, typography, hierarchy and component styling for a professional, clean look across all tabs (Search, Gallery & Inspector, Batch Export, Normalization, Blacklist, Image to Prompt, Settings).
-- **Selectable light/dark theme**: proper light-mode variants of the custom palette (WCAG AA contrast, ≥ 4.5:1), a theme picker persisted in `config.local.json`, and `prefers-color-scheme` honored as the initial default.
-- Bundle Inter / JetBrains Mono locally (closes R6-17) so the UI works fully offline.
-- Design tokens + component inventory to keep the theme maintainable (pairs well with the R6-25 `layout.py` split).
-- i18n: EN/ES parity for any new labels; zero-emoji rule preserved.
-- Regression coverage: wiring counts, theme persistence, and a visual smoke pass.
-
-**Effort**: large — the biggest UX investment on the roadmap.
-
-### 5. Audit R6 deferrals (low ROI now, or design work)
-
-Recorded from the R6 audit (October 2026); the fixes themselves shipped in v1.0.7.
-
-| ID | Item | Why deferred |
-|---|---|---|
-| R6-08 | CI hardening: pin actions to commit SHAs, add a `mypy` job, Python 3.13 in the matrix, coverage job, weekly `pip-audit` cron | CI hygiene; no runtime impact. Batch with the v1.1.0 infra work. |
-| R6-17 | Bundle Inter / JetBrains Mono locally (currently `gr.themes.GoogleFont` → browser fetches from `fonts.googleapis.com`) | Offline-purist improvement; needs font subsetting + licensing pass. |
-| R6-24 | Extract a shared `paginate()` helper into `BooruAdapter` (the loop is duplicated 6×: danbooru, gelbooru, e621, moebooru, philomena, zerochan) | Structural refactor; every past fix (R5-Y1, R6-09) had to be applied 6 times. Do with tests around each adapter's quirk. |
-| R6-25 | Split `layout.py` (2 178 lines, ~48 closures) into smaller modules | Maintainability; largest single refactor on the list. |
-
-Related mappings: R6-12 → limitation X8 (§2) and R6-13 → limitation X9 (§3) — already tracked above.
-
-## Explicitly out of scope for v1.1.0
-
-- Y6 (browser verification of the v1.0.5 gallery fix) — closed by manual user verification; no action.
-- R6-21 (Rule34.us scraper rates every post `e`) — **intentional**, fails toward the safe side. Documented as a known limitation, not a bug; do not "fix" without a real rating source.
+- **Rule34.us scraper rating (`R6-21`)**: rates scraped posts `e` (Explicit) conservatively because the HTML listing does not expose per-post rating metadata. Fails toward the safe side; do not alter without an authoritative rating source.
+- **DAPI tag categorization residual edge cases (`X9`)**: while the 3-layer classifier (expanded parenthesized exemptions + offline Tag Dictionary batch lookup + optional `DapiTagCategoryCache`) resolves common false positives like `red_(color)` or `sitting_(pose)` and known artists/franchises, brand-new unindexed tags on DAPI boards that use ambiguous parenthesized qualifiers still fall back to `character` or `general`.
 
 ## Conventions
 
-- Every version ships with: updated `pyproject.toml`, `hades_booru/__init__.py`, README header, and launchers; full test suite green; `ruff` clean.
+- Every version ships with: updated `pyproject.toml`, `hades_booru/__init__.py`, `README.md` header, and launchers (`start.bat` pure ASCII + CRLF, `start.sh`); full test suite green; `ruff` clean.
 - Release notes live in `RELEASES.md` (newest first); the README links to it.
 - Post-release fixes land on `master` without a release and are recorded in `RELEASES.md` under the affected version.

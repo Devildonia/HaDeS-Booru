@@ -14,6 +14,7 @@ Rating = Literal["g", "s", "q", "e", "u"]
 ExportMode = Literal["dataset", "unified", "trainer-zip", "local-folder"]
 ImageQuality = Literal["low", "medium", "high", "original", "text"]
 Language = Literal["en", "es"]
+ThemeMode = Literal["system", "dark", "light"]
 
 # Canonical set of meta/technical tags used by flat-tag adapters (Gelbooru, Moebooru, etc.)
 COMMON_META_TAGS: frozenset[str] = frozenset(
@@ -242,6 +243,7 @@ class AppConfig(BaseModel):
     persist_credentials: bool = True
     image_quality: ImageQuality = "high"
     language: Language = "en"
+    theme_mode: ThemeMode = "system"
     data_saver_mode: bool = False
     # v1.0.6: most-recent-first search history (dedup, capped in the UI layer).
     search_history: list[str] = Field(default_factory=list)

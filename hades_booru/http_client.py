@@ -31,11 +31,22 @@ E621_USER_AGENT = f"HaDeS_Booru_PromptHarvester/{__version__} (by HaDeS_Project)
 class BooruNetworkError(Exception):
     """Structured network exception with diagnostic context."""
 
-    def __init__(self, message: str, status_code: int | None = None, url: str = "") -> None:
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        url: str = "",
+        *,
+        retryable: bool = True,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.url = url
+        # R7-12: fatal conditions (size cap, SSRF guard) must not be retried —
+        # retrying re-downloads the oversized payload or re-probes the blocked
+        # address, so the retry loop raises them immediately.
+        self.retryable = retryable
 
 
 MAX_RETRY_AFTER_SECONDS = 30.0
@@ -67,6 +78,7 @@ def assert_public_host(url: str) -> None:
             f"Blocked request to non-public host '{host}'. "
             "Set HADES_ALLOW_PRIVATE_HOSTS=1 to allow private targets.",
             url=url,
+            retryable=False,
         )
     try:
         infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
@@ -81,6 +93,7 @@ def assert_public_host(url: str) -> None:
                 f"Blocked request to non-public address {ip} (host {host}). "
                 "Set HADES_ALLOW_PRIVATE_HOSTS=1 to allow private targets.",
                 url=url,
+                retryable=False,
             )
 
 
@@ -180,20 +193,29 @@ class HttpClient:
                             )
 
                         payload = bytearray()
-                        for chunk in response.iter_raw(65536):
+                        # v1.1.0 (live incident, safebooru.donmai.us): iter_bytes() decodes
+                        # Content-Encoding (gzip/deflate/br); iter_raw() would feed the
+                        # compressed bytes straight into the UTF-8 decode and produce a
+                        # garbage payload that fails JSON parsing.
+                        for chunk in response.iter_bytes(65536):
                             payload.extend(chunk)
-                            # Audit R6-20: hard cap on in-memory reads.
+                            # Audit R6-20: hard cap on in-memory reads (decoded size).
                             if len(payload) > TEXT_MAX_BYTES:
+                                # R7-12: fatal — do not retry (avoids re-downloading
+                                # the oversized payload up to `retries` more times).
                                 raise BooruNetworkError(
                                     f"Response from {urlparse(url).hostname} exceeds the "
                                     f"{TEXT_MAX_BYTES // (1024 * 1024)} MiB safety limit.",
                                     url=url,
+                                    retryable=False,
                                 )
                     return bytes(payload).decode("utf-8", errors="replace")
 
                 except BooruNetworkError as err:
                     last_err = err
-                    if err.status_code and 400 <= err.status_code < 500 and err.status_code != 429:
+                    # R7-12: fatal errors (status None: size cap / SSRF guard) and
+                    # non-429 4xx responses are raised immediately, no retry.
+                    if not err.retryable or (err.status_code and 400 <= err.status_code < 500 and err.status_code != 429):
                         raise
                     if attempt < retries:
                         time.sleep(0.6 * (attempt + 1))
@@ -235,13 +257,28 @@ class HttpClient:
         try:
             return json.loads(trimmed)
         except json.JSONDecodeError as err:
-            if trimmed.startswith("<!DOCTYPE") or trimmed.startswith("<html"):
+            # R7-12: case-insensitive detection of HTML/XML documents; never echo the
+            # body (R6-04 no-echo policy) — a hostile page could leak content through
+            # the error message.
+            # v1.1.0 (live incident, safebooru.donmai.us): a Cloudflare challenge page
+            # served with HTTP 200 did NOT start with <!doctype>/<html>, so the old
+            # 64-char prefix check fell through to the generic "not valid JSON"
+            # message. Substring-scan a wider window for HTML structure markers and
+            # the Cloudflare challenge signature instead of a strict prefix match.
+            head = trimmed[:512].lstrip().lower()
+            if any(
+                marker in head
+                for marker in ("<!doctype", "<html", "<?xml", "<head", "<body", "challenges.cloudflare.com")
+            ):
                 raise BooruNetworkError(
-                    f"Server {urlparse(url).hostname} returned an HTML page instead of JSON (possible maintenance or Cloudflare challenge).",
+                    f"Server {urlparse(url).hostname} returned a non-JSON page instead of a JSON API "
+                    "response. This is usually bot protection (e.g. a Cloudflare challenge), "
+                    "rate limiting, or maintenance: wait a minute and retry, or use a different source.",
                     url=url,
+                    retryable=False,
                 ) from err
             raise BooruNetworkError(
-                f"Invalid JSON from {urlparse(url).hostname}: {trimmed[:140]}",
+                f"Server {urlparse(url).hostname} returned a payload that is not valid JSON.",
                 url=url,
             ) from err
 
@@ -284,20 +321,27 @@ class HttpClient:
 
                         content_type = response.headers.get("content-type", "application/octet-stream")
                         payload = bytearray()
-                        for chunk in response.iter_raw(65536):
+                        # v1.1.0: iter_bytes() decodes Content-Encoding (gzip/deflate/br);
+                        # iter_raw() would corrupt compressed media bodies.
+                        for chunk in response.iter_bytes(65536):
                             payload.extend(chunk)
-                            # Audit R6-20: hard cap on in-memory downloads.
+                            # Audit R6-20: hard cap on in-memory downloads (decoded size).
                             if len(payload) > MEDIA_MAX_BYTES:
+                                # R7-12: fatal — do not retry (avoids re-downloading
+                                # the oversized media up to `retries` more times).
                                 raise BooruNetworkError(
                                     f"Media from {urlparse(url).hostname} exceeds the "
                                     f"{MEDIA_MAX_BYTES // (1024 * 1024)} MiB safety limit.",
                                     url=url,
+                                    retryable=False,
                                 )
                     return bytes(payload), content_type
 
                 except BooruNetworkError as err:
                     last_err = err
-                    if err.status_code and 400 <= err.status_code < 500 and err.status_code != 429:
+                    # R7-12: fatal errors (status None: size cap / SSRF guard) and
+                    # non-429 4xx responses are raised immediately, no retry.
+                    if not err.retryable or (err.status_code and 400 <= err.status_code < 500 and err.status_code != 429):
                         raise
                     if attempt < retries:
                         time.sleep(0.6 * (attempt + 1))

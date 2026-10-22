@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 CONFIG_FILE_PATH = Path("config.local.json")
 
+# v1.1.0 (audit R7): shared cap for the persisted search history so a union of two
+# instances' histories in _merge_with_disk() cannot double it. state.py imports it.
+MAX_SEARCH_HISTORY = 12
+
 
 class ConfigManager:
     """Thread-safe local JSON configuration manager with atomic persistence."""
@@ -30,6 +34,10 @@ class ConfigManager:
         self._lock = threading.RLock()
         self._path = config_path
         self._session_credentials: dict[str, SourceCredential] = {}
+        # R7-01: sources this process explicitly set (non-empty) at least once. Lets
+        # save() distinguish "this process cleared it" (wipe, N5) from "this process
+        # never had it; another instance persisted it" (keep the disk value).
+        self._creds_touched: set[str] = set()
         self.last_error: str | None = None
         self.config: AppConfig = self._load()
         # Audit R6-07: snapshot of the state at load time; save() uses it to tell
@@ -73,6 +81,10 @@ class ConfigManager:
                     s = str(item)
                     if s not in seen:
                         seen.append(s)
+                if key == "search_history":
+                    # R7 (new finding): cap the union; this process's most-recent
+                    # entries come first, so its recency wins.
+                    seen = seen[:MAX_SEARCH_HISTORY]
                 merged[key] = seen
                 continue
             merged[key] = my_val
@@ -143,33 +155,47 @@ class ConfigManager:
                     payload = self._merge_with_disk(disk_payload, self.config.model_dump(mode="json"))
 
                     if not self.config.persist_credentials:
-                        payload["credentials"] = {
-                            k: {"user_id": "", "api_key": ""}
-                            for k in self.config.credentials
-                        }
+                        # R7-01/R7-03: session-only mode must never wipe credentials
+                        # persisted by another instance; keep the on-disk values as-is
+                        # (this process's session credentials are memory-only by design).
+                        disk_creds = (disk_payload or {}).get("credentials")
+                        if isinstance(disk_creds, dict):
+                            payload["credentials"] = {
+                                str(k): self._normalize_creds_entry(v)
+                                for k, v in disk_creds.items()
+                            }
+                        else:
+                            payload["credentials"] = {
+                                k: {"user_id": "", "api_key": ""} for k in self.config.credentials
+                            }
                     else:
-                        # Merge credentials too (audit R6-07): an entry this process
-                        # never touched keeps the value persisted by another instance,
-                        # but an entry this process explicitly cleared (snapshot had a
-                        # value) must be wiped on disk — the N5 contract.
+                        # Merge credentials (audit R6-07 + R7-01):
+                        # - entry this process set (has a value) -> wins;
+                        # - entry this process set and then cleared -> wiped (N5);
+                        # - entry this process had at load and now empty -> wiped (N5);
+                        # - entry this process never had and never touched -> keep the
+                        #   value another instance persisted (no cross-instance wipe);
+                        # - entry unknown to this process (added by another instance
+                        #   after load) -> keep the disk value.
                         disk_creds = payload.get("credentials")
                         disk_creds = disk_creds if isinstance(disk_creds, dict) else {}
                         merged_creds: dict[str, dict[str, str]] = {}
                         for k in set(self._session_credentials) | set(disk_creds):
                             sc = self._session_credentials.get(k)
-                            dc = disk_creds.get(k) if isinstance(disk_creds.get(k), dict) else None
-                            disk_has_value = isinstance(dc, dict) and bool(dc.get("user_id") or dc.get("api_key"))
+                            disk_entry = self._normalize_creds_entry(disk_creds.get(k))
+                            snap = self._loaded_creds_snapshot.get(k)
+                            snap_had_value = bool(snap and (snap.user_id or snap.api_key))
                             if sc is not None and (sc.user_id or sc.api_key):
                                 merged_creds[k] = {"user_id": sc.user_id, "api_key": sc.api_key}
-                            elif disk_has_value and not self._loaded_creds_snapshot.get(k):
-                                # This process never set credentials for this source:
-                                # keep what another instance persisted.
-                                merged_creds[k] = {
-                                    "user_id": str(dc.get("user_id") or ""),
-                                    "api_key": str(dc.get("api_key") or ""),
-                                }
-                            else:
+                            elif sc is None:
+                                merged_creds[k] = dict(disk_entry)
+                            elif k in self._creds_touched or snap_had_value:
+                                # Explicitly cleared by this process (N5 contract).
                                 merged_creds[k] = {"user_id": "", "api_key": ""}
+                            else:
+                                # Loaded empty and never touched: another instance
+                                # persisted it -> keep the disk value (R7-01).
+                                merged_creds[k] = dict(disk_entry)
                         payload["credentials"] = merged_creds
 
                     serialized = json.dumps(payload, indent=2, ensure_ascii=False)
@@ -194,6 +220,15 @@ class ConfigManager:
                 except OSError:
                     pass
                 return False
+
+    @staticmethod
+    def _normalize_creds_entry(raw: object) -> dict[str, str]:
+        if isinstance(raw, dict):
+            return {
+                "user_id": str(raw.get("user_id") or ""),
+                "api_key": str(raw.get("api_key") or ""),
+            }
+        return {"user_id": "", "api_key": ""}
 
     def get_credentials(self, source_id: str) -> SourceCredential:
         """Retrieves active credentials for a given source ID (from session memory)."""
@@ -239,6 +274,7 @@ class ConfigManager:
                     api_key=clean_key,
                 )
                 self._session_credentials[source_id] = cred
+                self._creds_touched.add(source_id)
                 if self.config.persist_credentials:
                     self.config.credentials[source_id] = cred
                 else:
@@ -247,8 +283,14 @@ class ConfigManager:
             return self.save()
 
     def clear_credentials(self) -> bool:
-        """Clears all saved API credentials from both session memory and disk (N5)."""
+        """Clears all saved API credentials from both session memory and disk (N5).
+
+        Only sources this process knows about are wiped (N5). Sources another
+        instance added to disk after this process loaded are left untouched — the
+        safe direction for multi-instance setups (audit R7-01/R7-03).
+        """
         with self._lock:
+            self._creds_touched.update(self.config.credentials.keys())
             self._session_credentials = {
                 k: SourceCredential() for k in self.config.credentials
             }

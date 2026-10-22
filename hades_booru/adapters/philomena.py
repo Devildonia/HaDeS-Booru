@@ -5,9 +5,7 @@ Supports derpibooru.org (/api/v1/json/search/images).
 
 from __future__ import annotations
 
-import math
 import re
-import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -38,7 +36,8 @@ class PhilomenaAdapter(BooruAdapter):
         if not post_id:
             return None
 
-        reps = raw.get("representations") if isinstance(raw.get("representations"), dict) else {}
+        reps_val = raw.get("representations")
+        reps: dict[str, Any] = reps_val if isinstance(reps_val, dict) else {}
         view_url = str(raw.get("view_url") or "")
         file_url = str(reps.get("full") or view_url)
         sample_url = str(reps.get("large") or reps.get("medium") or file_url)
@@ -48,7 +47,8 @@ class PhilomenaAdapter(BooruAdapter):
         if not preview_url and not file_url:
             return None
 
-        raw_tags_list = raw.get("tags") if isinstance(raw.get("tags"), list) else []
+        raw_tags_val = raw.get("tags")
+        raw_tags_list: list[Any] = raw_tags_val if isinstance(raw_tags_val, list) else []
         artist: list[str] = []
         character: list[str] = []
         general: list[str] = []
@@ -102,8 +102,17 @@ class PhilomenaAdapter(BooruAdapter):
             ),
             raw_tags=all_raw,
             created_at=str(raw.get("created_at") or "") or None,
-            score=int(raw.get("score")) if raw.get("score") is not None else None,
+            score=self._safe_int(raw.get("score")),
         )
+
+    @staticmethod
+    def _safe_int(value: Any) -> int | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def search(
         self,
@@ -112,10 +121,6 @@ class PhilomenaAdapter(BooruAdapter):
         progress_cb: ProgressCallback | None = None,
         rating: str | None = None,  # Philomena has no stable rating query param; UI filters client-side.
     ) -> list[Post]:
-        target_count = max(1, min(limit, 500))
-        page_size = min(50, target_count)
-        total_pages = math.ceil(target_count / page_size)
-
         # Philomena queries use comma-separated tags; convert space-separated tags if no commas are present
         stripped = tags.strip()
         if not stripped:
@@ -125,57 +130,26 @@ class PhilomenaAdapter(BooruAdapter):
         else:
             query_str = ", ".join(t.replace("_", " ") for t in stripped.split() if t)
 
-        posts: list[Post] = []
-        seen_ids: set[str] = set()
-        self.last_warning = None
+        url = f"https://{self.default_domain}/api/v1/json/search/images"
 
-        for page in range(1, total_pages + 1):
-            if progress_cb:
-                progress_cb(
-                    min(0.95, (page - 1) / max(1, total_pages)),
-                    f"Querying {self.name} (Page {page}/{total_pages})...",
-                )
-
-            url = f"https://{self.default_domain}/api/v1/json/search/images"
+        def _fetch_page(page: int, page_size: int) -> Any:
             params: dict[str, Any] = {
                 "q": query_str,
                 "per_page": page_size,
                 "page": page,
             }
+            data = http_client.get_json(url, params=params)
+            return data.get("images") if isinstance(data, dict) else []
 
-            try:
-                data = http_client.get_json(url, params=params)
-                batch = data.get("images") if isinstance(data, dict) else []
-                if not isinstance(batch, list) or not batch:
-                    break
-
-                for item in batch:
-                    if not isinstance(item, dict):
-                        continue
-                    mapped = self._map_post(item)
-                    if mapped and mapped.id not in seen_ids:
-                        seen_ids.add(mapped.id)
-                        posts.append(mapped)
-                        if len(posts) >= target_count:
-                            break
-
-                if len(batch) < page_size or len(posts) >= target_count:
-                    break
-
-                if page < total_pages:
-                    time.sleep(0.25)
-
-            except Exception as err:
-                if posts:
-                    # Surface the partial-result condition instead of failing silently.
-                    self.last_warning = f"pagination stopped early on page {page}: {err}"
-                    break
-                raise
-
-        if progress_cb:
-            progress_cb(1.0, f"Loaded {len(posts)} posts from {self.name}.")
-
-        return posts[:target_count]
+        return self.paginate(
+            limit=limit,
+            max_limit=500,
+            max_page_size=50,
+            page_delay=0.25,
+            fetch_page=_fetch_page,
+            map_item=self._map_post,
+            progress_cb=progress_cb,
+        )
 
     def fetch_single_by_url(self, url: str) -> Post:
         parsed = urlparse(url)

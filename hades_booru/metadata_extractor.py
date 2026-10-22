@@ -94,10 +94,8 @@ def _clean_text(value: object) -> str:
     if value is None:
         return ""
     if isinstance(value, bytes):
-        try:
-            value = value.decode("utf-8", errors="replace")
-        except Exception:
-            value = value.decode("latin-1", errors="replace")
+        # errors="replace" never raises; no latin-1 fallback needed (R7 type fix).
+        value = value.decode("utf-8", errors="replace")
     text = str(value)
     text = html.unescape(text)
     return text.strip()
@@ -154,8 +152,8 @@ def _extract_comfyui_prompt(blob: str) -> tuple[str, str] | None:
         neg_id = neg_id or _link_target(inputs.get("negative"))
 
     if pos_id is not None or neg_id is not None:
-        positive = texts.get(pos_id, "")
-        negative = texts.get(neg_id, "")
+        positive = texts.get(pos_id, "") if pos_id is not None else ""
+        negative = texts.get(neg_id, "") if neg_id is not None else ""
         # Audit Y3: text nodes NOT linked by the sampler are dead nodes (orphaned
         # style presets, discarded drafts). Mixing them into the negative prompt would
         # inject positive-side words ("1girl, smile") into what users train against,

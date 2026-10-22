@@ -6,9 +6,7 @@ aibooru.online, and booru.allthefallen.moe.
 
 from __future__ import annotations
 
-import math
 import re
-import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -160,10 +158,6 @@ class DanbooruAdapter(BooruAdapter):
         progress_cb: ProgressCallback | None = None,
         rating: str | None = None,
     ) -> list[Post]:
-        target_count = max(1, min(limit, 500))
-        page_size = min(200, target_count)
-        total_pages = math.ceil(target_count / page_size)
-
         user_tokens = [t for t in tags.strip().split() if t]
         base_tags = " ".join(user_tokens)
         auth = self._get_auth()
@@ -177,72 +171,37 @@ class DanbooruAdapter(BooruAdapter):
         )
         clean_tags = f"{base_tags} {rating_tag}".strip() if can_inject_rating else base_tags
         self.server_rating_applied = can_inject_rating
+        url = f"https://{self.default_domain}/posts.json"
 
-        posts: list[Post] = []
-        seen_ids: set[str] = set()
-        self.last_warning = None
-
-        for page in range(1, total_pages + 1):
-            if progress_cb:
-                progress_cb(
-                    min(0.95, (page - 1) / max(1, total_pages)),
-                    f"Querying {self.name} (Page {page}/{total_pages})...",
-                )
-
-            url = f"https://{self.default_domain}/posts.json"
-            params: dict[str, Any] = {
-                "limit": page_size,
-                "page": page,
-            }
+        def _fetch_page(page: int, page_size: int) -> Any:
+            nonlocal can_inject_rating, clean_tags
+            params: dict[str, Any] = {"limit": page_size, "page": page}
             if clean_tags:
                 params["tags"] = clean_tags
-
             try:
-                try:
-                    batch = http_client.get_json(url, params=params, auth=auth)
-                except BooruNetworkError as net_err:
-                    # Fallback if a member account or mirror rejects the extra rating tag with HTTP 422
-                    if net_err.status_code == 422 and can_inject_rating and base_tags:
-                        can_inject_rating = False
-                        # Audit Y1: the server did NOT apply the rating filter in this
-                        # fallback pass — force the UI's client-side safety filter back on,
-                        # or "General" could return explicit posts.
-                        self.server_rating_applied = False
-                        clean_tags = base_tags
-                        params["tags"] = clean_tags
-                        batch = http_client.get_json(url, params=params, auth=auth)
-                    else:
-                        raise
-                if not isinstance(batch, list) or not batch:
-                    break
-
-                for item in batch:
-                    if not isinstance(item, dict):
-                        continue
-                    mapped = self._map_post(item, self.default_domain)
-                    if mapped and mapped.id not in seen_ids:
-                        seen_ids.add(mapped.id)
-                        posts.append(mapped)
-                        if len(posts) >= target_count:
-                            break
-
-                if len(batch) < page_size or len(posts) >= target_count:
-                    break
-
-                if page < total_pages:
-                    time.sleep(0.18)
-
-            except Exception as err:
-                if posts:
-                    # Surface the partial-result condition instead of failing silently.
-                    self.last_warning = f"pagination stopped early on page {page}: {err}"
-                    break
+                return http_client.get_json(url, params=params, auth=auth)
+            except BooruNetworkError as net_err:
+                # Fallback if a member account or mirror rejects the extra rating tag with HTTP 422
+                if net_err.status_code == 422 and can_inject_rating and base_tags:
+                    can_inject_rating = False
+                    # Audit Y1: the server did NOT apply the rating filter in this
+                    # fallback pass — force the UI's client-side safety filter back on,
+                    # or "General" could return explicit posts.
+                    self.server_rating_applied = False
+                    clean_tags = base_tags
+                    params["tags"] = clean_tags
+                    return http_client.get_json(url, params=params, auth=auth)
                 raise
 
-        if progress_cb:
-            progress_cb(1.0, f"Loaded {len(posts)} posts from {self.name}.")
-
-        return posts[:target_count]
+        return self.paginate(
+            limit=limit,
+            max_limit=500,
+            max_page_size=200,
+            page_delay=0.18,
+            fetch_page=_fetch_page,
+            map_item=lambda item: self._map_post(item, self.default_domain),
+            progress_cb=progress_cb,
+        )
 
     def fetch_single_by_url(self, url: str) -> Post:
         parsed = urlparse(url)

@@ -235,11 +235,12 @@ class AdapterRegistry:
             return None
 
         qs = parse_qs(parsed.query)
-        raw_param = (
-            (qs.get("tags") or [None])[0]
-            or (qs.get("q") or [None])[0]
-            or (qs.get("query") or [None])[0]
-        )
+
+        def _first_param(key: str) -> str | None:
+            values = qs.get(key)
+            return values[0] if values else None
+
+        raw_param = _first_param("tags") or _first_param("q") or _first_param("query")
         extracted_tags: str | None = None
         if raw_param:
             extracted_tags = unquote(raw_param).replace("+", " ").strip()
