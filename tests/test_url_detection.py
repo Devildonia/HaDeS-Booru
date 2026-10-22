@@ -1,5 +1,5 @@
 """
-Unit Tests for AdapterRegistry and URL Auto-Detection across all 27 registered sources.
+Unit Tests for AdapterRegistry and URL Auto-Detection across all 28 registered sources.
 """
 
 from __future__ import annotations
@@ -7,9 +7,9 @@ from __future__ import annotations
 from hades_booru.adapters.registry import registry
 
 
-def test_registry_has_all_27_sources() -> None:
+def test_registry_has_all_28_sources() -> None:
     specs = registry.get_all_specs()
-    assert len(specs) == 27
+    assert len(specs) == 28
     ids = {s.id for s in specs}
     expected_ids = {
         "danbooru",
@@ -33,6 +33,7 @@ def test_registry_has_all_27_sources() -> None:
         "e621",
         "e926",
         "derpibooru",
+        "furbooru",
         "zerochan",
         "deviantart",
         "artstation",
@@ -73,6 +74,11 @@ def test_direct_post_url_detection() -> None:
     assert d_derpi is not None
     assert d_derpi.adapter.id == "derpibooru"
     assert d_derpi.is_direct_post is True
+
+    d_fur = registry.detect_source_from_url("https://furbooru.org/images/4100000")
+    assert d_fur is not None
+    assert d_fur.adapter.id == "furbooru"
+    assert d_fur.is_direct_post is True
 
     d_zero = registry.detect_source_from_url("https://www.zerochan.net/4012345")
     assert d_zero is not None

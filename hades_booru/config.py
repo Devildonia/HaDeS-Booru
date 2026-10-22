@@ -6,6 +6,7 @@ file permission hardening (0600), and optional session-only credential storage.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -52,12 +53,21 @@ class ConfigManager:
         }
 
     def _merge_with_disk(self, disk: dict | None, mine: dict) -> dict:
-        """Audit R6-07: field-level merge between this process's state and the on-disk state.
+        """Audit R6-07 + R7-B: 3-way field-level merge (base=snapshot at load, mine, disk).
 
-        - Fields this process never touched keep the disk value (another instance may
-          have updated them — now a normal case thanks to the port auto-fallback).
-        - List fields are unioned (most-recent-first order of this process wins).
-        - When both sides changed a scalar, this process wins (it is the one saving).
+        Per field:
+        - untouched by this process (mine == snapshot): the disk value wins —
+          another instance may have updated it (a normal case since the port
+          auto-fallback made multi-instance runs common);
+        - changed by this process (mine != snapshot): mine wins — including
+          clearing a list to ``[]`` or removing individual items. The old
+          unconditional union logic resurrected cleared/removed entries (audit
+          R7-B cases 2b and 3); the old snapshot comparison also made scalars
+          unable to revert back to their loaded value (cases 1b/1c). The snapshot
+          is now refreshed after every successful save(), re-basing the merge;
+        - lists this process only APPENDED to (snapshot ⊆ mine) keep the union so
+          entries another instance added in the meantime survive (R6-07
+          cross-instance safety).
         """
         if not isinstance(disk, dict):
             return mine
@@ -72,21 +82,27 @@ class ConfigManager:
                 continue
             my_val = mine[key]
             disk_val = disk[key]
-            if my_val == snapshot.get(key, my_val):
+            base_val = snapshot.get(key, my_val)
+            if my_val == base_val:
                 merged[key] = disk_val
                 continue
             if isinstance(my_val, list) and isinstance(disk_val, list):
-                seen: list = []
-                for item in list(my_val) + list(disk_val):
-                    s = str(item)
-                    if s not in seen:
-                        seen.append(s)
-                if key == "search_history":
-                    # R7 (new finding): cap the union; this process's most-recent
-                    # entries come first, so its recency wins.
-                    seen = seen[:MAX_SEARCH_HISTORY]
-                merged[key] = seen
-                continue
+                base_set = {str(x) for x in base_val} if isinstance(base_val, list) else set()
+                mine_set = {str(x) for x in my_val}
+                if base_set.issubset(mine_set):
+                    # This process only appended: union so another instance's new
+                    # entries survive; most-recent-first order of this process wins.
+                    seen: list = []
+                    for item in list(my_val) + list(disk_val):
+                        s = str(item)
+                        if s not in seen:
+                            seen.append(s)
+                    if key == "search_history":
+                        # Cap the union; this process's most-recent entries come
+                        # first, so its recency wins.
+                        seen = seen[:MAX_SEARCH_HISTORY]
+                    merged[key] = seen
+                    continue
             merged[key] = my_val
         return merged
 
@@ -154,49 +170,47 @@ class ConfigManager:
 
                     payload = self._merge_with_disk(disk_payload, self.config.model_dump(mode="json"))
 
-                    if not self.config.persist_credentials:
-                        # R7-01/R7-03: session-only mode must never wipe credentials
-                        # persisted by another instance; keep the on-disk values as-is
-                        # (this process's session credentials are memory-only by design).
-                        disk_creds = (disk_payload or {}).get("credentials")
-                        if isinstance(disk_creds, dict):
-                            payload["credentials"] = {
-                                str(k): self._normalize_creds_entry(v)
-                                for k, v in disk_creds.items()
-                            }
-                        else:
-                            payload["credentials"] = {
-                                k: {"user_id": "", "api_key": ""} for k in self.config.credentials
-                            }
+                    # Merge credentials (audit R6-07 + R7-01 + R7-B):
+                    # persist=True: - entry this process set (has a value) -> wins;
+                    #              - entry this process set and then cleared -> wiped (N5);
+                    #              - entry this process had at load and now empty -> wiped (N5);
+                    #              - entry this process never had and never touched -> keep
+                    #                the value another instance persisted (no cross-instance wipe);
+                    #              - entry unknown to this process (added by another instance
+                    #                after load) -> keep the disk value.
+                    # persist=False (R7-01/R7-03): only entries THIS process explicitly
+                    # set or cleared (touched) are wiped; credentials merely loaded from
+                    # disk by this process, or persisted by another instance, are kept.
+                    if self.config.persist_credentials:
+                        raw_disk_creds = payload.get("credentials")
                     else:
-                        # Merge credentials (audit R6-07 + R7-01):
-                        # - entry this process set (has a value) -> wins;
-                        # - entry this process set and then cleared -> wiped (N5);
-                        # - entry this process had at load and now empty -> wiped (N5);
-                        # - entry this process never had and never touched -> keep the
-                        #   value another instance persisted (no cross-instance wipe);
-                        # - entry unknown to this process (added by another instance
-                        #   after load) -> keep the disk value.
-                        disk_creds = payload.get("credentials")
-                        disk_creds = disk_creds if isinstance(disk_creds, dict) else {}
-                        merged_creds: dict[str, dict[str, str]] = {}
-                        for k in set(self._session_credentials) | set(disk_creds):
-                            sc = self._session_credentials.get(k)
-                            disk_entry = self._normalize_creds_entry(disk_creds.get(k))
-                            snap = self._loaded_creds_snapshot.get(k)
-                            snap_had_value = bool(snap and (snap.user_id or snap.api_key))
-                            if sc is not None and (sc.user_id or sc.api_key):
-                                merged_creds[k] = {"user_id": sc.user_id, "api_key": sc.api_key}
-                            elif sc is None:
-                                merged_creds[k] = dict(disk_entry)
-                            elif k in self._creds_touched or snap_had_value:
-                                # Explicitly cleared by this process (N5 contract).
-                                merged_creds[k] = {"user_id": "", "api_key": ""}
-                            else:
-                                # Loaded empty and never touched: another instance
-                                # persisted it -> keep the disk value (R7-01).
-                                merged_creds[k] = dict(disk_entry)
-                        payload["credentials"] = merged_creds
+                        raw_disk_creds = (disk_payload or {}).get("credentials")
+                    disk_creds = raw_disk_creds if isinstance(raw_disk_creds, dict) else {}
+                    merged_creds: dict[str, dict[str, str]] = {}
+                    for k in set(self._session_credentials) | set(disk_creds):
+                        sc = self._session_credentials.get(k)
+                        disk_entry = self._normalize_creds_entry(disk_creds.get(k))
+                        snap = self._loaded_creds_snapshot.get(k)
+                        snap_had_value = bool(snap and (snap.user_id or snap.api_key))
+                        if not self.config.persist_credentials:
+                            # Session-only mode: wipe what this process touched, keep the rest.
+                            merged_creds[k] = (
+                                {"user_id": "", "api_key": ""}
+                                if k in self._creds_touched
+                                else dict(disk_entry)
+                            )
+                        elif sc is not None and (sc.user_id or sc.api_key):
+                            merged_creds[k] = {"user_id": sc.user_id, "api_key": sc.api_key}
+                        elif sc is None:
+                            merged_creds[k] = dict(disk_entry)
+                        elif k in self._creds_touched or snap_had_value:
+                            # Explicitly cleared by this process (N5 contract).
+                            merged_creds[k] = {"user_id": "", "api_key": ""}
+                        else:
+                            # Loaded empty and never touched: another instance persisted it
+                            # -> keep the disk value (R7-01).
+                            merged_creds[k] = dict(disk_entry)
+                    payload["credentials"] = merged_creds
 
                     serialized = json.dumps(payload, indent=2, ensure_ascii=False)
                     tmp_path.write_text(serialized, encoding="utf-8")
@@ -209,6 +223,12 @@ class ConfigManager:
                         os.chmod(self._path, 0o600)
                     except OSError:
                         pass
+                    # Audit R7-B: re-base the 3-way merge on what is now actually on
+                    # disk. Without this, a value changed and then reverted to its
+                    # loaded value would be indistinguishable from "untouched" and
+                    # the stale disk value would resurrect (cases 1b/1c/2b).
+                    # deepcopy: the snapshot must not alias live config lists.
+                    self._loaded_snapshot = copy.deepcopy(payload)
                 self.last_error = None
                 return True
             except OSError as err:

@@ -259,3 +259,12 @@ class BooruSourceSpec(BaseModel):
     description: str
     categorized_tags: bool = False
     supports_pagination: bool = True
+    # v1.1.1 (source catalog metadata): capability/health flags so the UI and
+    # future auto-status checks can reason about each source without scraping.
+    # `api_family` is only filled for sources registered with it (newer entries);
+    # legacy entries stay None until a full catalog pass (v1.1.x).
+    api_family: str | None = None
+    auth_required: bool = False
+    supports_tags: bool = True
+    supports_rating_filter: bool = False
+    status: str = "active"

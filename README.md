@@ -1,4 +1,4 @@
-# HaDeS Booru v1.1.0
+# HaDeS Booru v1.1.1
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -9,12 +9,12 @@ Multi-source tag extractor, semantic prompt normalizer, offline tag dictionary, 
 ## Features
 
 - **Native HTTP Engine**: Requests and image downloads execute through Python (`httpx`) with domain-specific headers (`User-Agent` and `Referer`) and automatic backoff.
-- **27 Supported Sources Across 7 API Families**:
+- **28 Supported Sources Across 7 API Families**:
   - **Danbooru v2**: `danbooru.donmai.us`, `safebooru.donmai.us`, `hijiribe.donmai.us`, `sonohara.donmai.us`, `aibooru.online`, `booru.allthefallen.moe`
   - **Gelbooru / DAPI**: `safebooru.org`, `gelbooru.com`, `rule34.xxx`, `rule34.us`, `tbib.org`, `xbooru.com`, `realbooru.com`
   - **Moebooru**: `konachan.com`, `konachan.net`, `yande.re`, `sakugabooru.com`, `lolibooru.moe`
   - **E621 / E926**: `e621.net`, `e926.net`
-  - **Philomena**: `derpibooru.org`
+  - **Philomena**: `derpibooru.org`, `furbooru.org` (v1.1.1)
   - **Zerochan**: `zerochan.net`
   - **Art Platforms & OpenGraph**: `deviantart.com` (RSS), `artstation.com`, `pawoo.net`, `e-hentai.org`, `booru.io`
 - **Offline Tag Dictionary**: Built-in SQLite dictionary (`hades_booru/tag_dictionary/`) with millisecond exact-match lookup, alias resolution (`miku` -> `hatsune_miku`), Danbooru wiki links, and strict bilingual definitions (English original + curated Spanish translation where genuinely defined; never auto-translated). Includes a standalone CLI importer (`python -m hades_booru.tag_dictionary.importer`) to fetch expanded catalogs from the Danbooru API.

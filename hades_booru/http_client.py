@@ -67,6 +67,13 @@ def assert_public_host(url: str) -> None:
     a remote visitor could otherwise use the server to probe the internal network
     (SSRF). Set `HADES_ALLOW_PRIVATE_HOSTS=1` to allow non-public targets
     (e.g. a self-hosted board on the LAN).
+
+    Audit R7-F (accepted limitation): the DNS lookup here and the lookup httpx
+    performs when it actually connects are two separate resolutions, so a
+    DNS-rebinding host (public IP on first lookup, private IP on connect) could
+    in theory slip through. A full fix would require IP-pinned connections, which
+    is disproportionate for this app's threat model; the per-hop SSRF check still
+    blocks the common cases (loopback, RFC1918, link-local, reserved).
     """
     if _private_hosts_allowed():
         return
@@ -97,11 +104,21 @@ def assert_public_host(url: str) -> None:
             )
 
 
-def _redirect_guard(response: httpx.Response) -> None:
-    """Audit R6-04: applies the public-host check to every redirect hop as well."""
-    nxt = response.next_request
-    if nxt is not None:
-        assert_public_host(str(nxt.url))
+# Audit R7-A: httpx runs response event hooks BEFORE it builds the follow-up
+# redirect request, so inside a hook `response.next_request` is always None and a
+# hook-based guard (the old R6-04 `_redirect_guard`) never fired — a 302 to
+# http://127.0.0.1 slipped through. Instead, get_text()/download_bytes() follow
+# redirects manually (at most MAX_REDIRECT_HOPS hops) and validate EVERY hop with
+# assert_public_host() before the next request leaves the process.
+MAX_REDIRECT_HOPS = 5
+
+
+def _next_redirect_target(response: httpx.Response, current_url: str) -> str | None:
+    """Returns the absolute redirect target for a redirect response, or None when missing."""
+    location = response.headers.get("location")
+    if not location:
+        return None
+    return str(httpx.URL(current_url).join(location))
 
 
 def _retry_after_seconds(headers: Any) -> float:
@@ -164,52 +181,79 @@ class HttpClient:
         # Reuse a single connection pool for the whole retry sequence.
         with httpx.Client(
             timeout=self.timeout,
-            follow_redirects=True,
+            follow_redirects=False,  # R7-A: redirects are followed manually below
             headers=req_headers,
-            event_hooks={"response": [_redirect_guard]},
         ) as client:
             for attempt in range(retries + 1):
                 try:
-                    with client.stream("GET", url, params=params, auth=auth) as response:
-                        if response.status_code == 429:
-                            if attempt < retries:
-                                time.sleep(max(1.5 * (attempt + 1), _retry_after_seconds(response.headers)))
+                    current_url = url
+                    for _hop in range(MAX_REDIRECT_HOPS + 1):
+                        # Audit R7-A: validate every redirect hop against the SSRF
+                        # guard BEFORE the next request leaves the process.
+                        assert_public_host(current_url)
+                        with client.stream(
+                            "GET",
+                            current_url,
+                            params=params if current_url == url else None,
+                            auth=auth,
+                        ) as response:
+                            if response.is_redirect:
+                                nxt = _next_redirect_target(response, current_url)
+                                if nxt is None:
+                                    raise BooruNetworkError(
+                                        f"Redirect from {urlparse(current_url).hostname} has no Location header.",
+                                        url=current_url,
+                                        retryable=False,
+                                    )
+                                current_url = nxt
                                 continue
-                            raise BooruNetworkError(
-                                f"Rate limit exceeded (HTTP 429) on {urlparse(url).hostname}. Wait a few seconds or add API credentials.",
-                                status_code=429,
-                                url=url,
-                            )
 
-                        if response.status_code >= 400:
-                            # Audit R6-04: never echo the response body into user-facing
-                            # messages - a hostile/internal page could leak its content
-                            # that way. Only the status code and the host are surfaced.
-                            raise BooruNetworkError(
-                                f"HTTP {response.status_code} from {urlparse(url).hostname} "
-                                f"({response.reason_phrase or 'error'}).",
-                                status_code=response.status_code,
-                                url=url,
-                            )
-
-                        payload = bytearray()
-                        # v1.1.0 (live incident, safebooru.donmai.us): iter_bytes() decodes
-                        # Content-Encoding (gzip/deflate/br); iter_raw() would feed the
-                        # compressed bytes straight into the UTF-8 decode and produce a
-                        # garbage payload that fails JSON parsing.
-                        for chunk in response.iter_bytes(65536):
-                            payload.extend(chunk)
-                            # Audit R6-20: hard cap on in-memory reads (decoded size).
-                            if len(payload) > TEXT_MAX_BYTES:
-                                # R7-12: fatal — do not retry (avoids re-downloading
-                                # the oversized payload up to `retries` more times).
+                            if response.status_code == 429:
+                                if attempt < retries:
+                                    time.sleep(max(1.5 * (attempt + 1), _retry_after_seconds(response.headers)))
+                                    break
                                 raise BooruNetworkError(
-                                    f"Response from {urlparse(url).hostname} exceeds the "
-                                    f"{TEXT_MAX_BYTES // (1024 * 1024)} MiB safety limit.",
+                                    f"Rate limit exceeded (HTTP 429) on {urlparse(url).hostname}. Wait a few seconds or add API credentials.",
+                                    status_code=429,
                                     url=url,
-                                    retryable=False,
                                 )
-                    return bytes(payload).decode("utf-8", errors="replace")
+
+                            if response.status_code >= 400:
+                                # Audit R6-04: never echo the response body into user-facing
+                                # messages - a hostile/internal page could leak its content
+                                # that way. Only the status code and the host are surfaced.
+                                raise BooruNetworkError(
+                                    f"HTTP {response.status_code} from {urlparse(url).hostname} "
+                                    f"({response.reason_phrase or 'error'}).",
+                                    status_code=response.status_code,
+                                    url=url,
+                                )
+
+                            payload = bytearray()
+                            # v1.1.0 (live incident, safebooru.donmai.us): iter_bytes() decodes
+                            # Content-Encoding (gzip/deflate/br); iter_raw() would feed the
+                            # compressed bytes straight into the UTF-8 decode and produce a
+                            # garbage payload that fails JSON parsing.
+                            for chunk in response.iter_bytes(65536):
+                                payload.extend(chunk)
+                                # Audit R6-20: hard cap on in-memory reads (decoded size).
+                                if len(payload) > TEXT_MAX_BYTES:
+                                    # R7-12: fatal — do not retry (avoids re-downloading
+                                    # the oversized payload up to `retries` more times).
+                                    raise BooruNetworkError(
+                                        f"Response from {urlparse(url).hostname} exceeds the "
+                                        f"{TEXT_MAX_BYTES // (1024 * 1024)} MiB safety limit.",
+                                        url=url,
+                                        retryable=False,
+                                    )
+                        return bytes(payload).decode("utf-8", errors="replace")
+                    else:
+                        # Loop exhausted without break/return: every hop was a redirect.
+                        raise BooruNetworkError(
+                            f"Too many redirects (>{MAX_REDIRECT_HOPS}) from {urlparse(url).hostname}.",
+                            url=url,
+                            retryable=False,
+                        )
 
                 except BooruNetworkError as err:
                     last_err = err
@@ -279,7 +323,6 @@ class HttpClient:
                 ) from err
             raise BooruNetworkError(
                 f"Server {urlparse(url).hostname} returned a payload that is not valid JSON.",
-                url=url,
             ) from err
 
     def download_bytes(self, url: str, retries: int = 2) -> tuple[bytes, str]:
@@ -295,52 +338,78 @@ class HttpClient:
         # Reuse a single connection pool for the whole retry sequence.
         with httpx.Client(
             timeout=dl_timeout,
-            follow_redirects=True,
+            follow_redirects=False,  # R7-A: redirects are followed manually below
             headers=req_headers,
-            event_hooks={"response": [_redirect_guard]},
         ) as client:
             for attempt in range(retries + 1):
                 try:
-                    with client.stream("GET", url) as response:
-                        if response.status_code == 429:
-                            if attempt < retries:
-                                time.sleep(max(1.5 * (attempt + 1), _retry_after_seconds(response.headers)))
+                    current_url = url
+                    for _hop in range(MAX_REDIRECT_HOPS + 1):
+                        # Audit R7-A: validate every redirect hop against the SSRF
+                        # guard BEFORE the next request leaves the process.
+                        assert_public_host(current_url)
+                        with client.stream(
+                            "GET",
+                            current_url,
+                            auth=None,
+                        ) as response:
+                            if response.is_redirect:
+                                nxt = _next_redirect_target(response, current_url)
+                                if nxt is None:
+                                    raise BooruNetworkError(
+                                        f"Redirect from {urlparse(current_url).hostname} has no Location header.",
+                                        url=current_url,
+                                        retryable=False,
+                                    )
+                                current_url = nxt
                                 continue
-                            raise BooruNetworkError(
-                                f"Rate limit exceeded (HTTP 429) downloading media from {urlparse(url).hostname}.",
-                                status_code=429,
-                                url=url,
-                            )
 
-                        if response.status_code >= 400:
-                            raise BooruNetworkError(
-                                f"HTTP {response.status_code} downloading media from {urlparse(url).hostname}.",
-                                status_code=response.status_code,
-                                url=url,
-                            )
-
-                        content_type = response.headers.get("content-type", "application/octet-stream")
-                        payload = bytearray()
-                        # v1.1.0: iter_bytes() decodes Content-Encoding (gzip/deflate/br);
-                        # iter_raw() would corrupt compressed media bodies.
-                        for chunk in response.iter_bytes(65536):
-                            payload.extend(chunk)
-                            # Audit R6-20: hard cap on in-memory downloads (decoded size).
-                            if len(payload) > MEDIA_MAX_BYTES:
-                                # R7-12: fatal — do not retry (avoids re-downloading
-                                # the oversized media up to `retries` more times).
+                            if response.status_code == 429:
+                                if attempt < retries:
+                                    time.sleep(max(1.5 * (attempt + 1), _retry_after_seconds(response.headers)))
+                                    break
                                 raise BooruNetworkError(
-                                    f"Media from {urlparse(url).hostname} exceeds the "
-                                    f"{MEDIA_MAX_BYTES // (1024 * 1024)} MiB safety limit.",
+                                    f"Rate limit exceeded (HTTP 429) downloading media from {urlparse(url).hostname}.",
+                                    status_code=429,
                                     url=url,
-                                    retryable=False,
                                 )
-                    return bytes(payload), content_type
+
+                            if response.status_code >= 400:
+                                raise BooruNetworkError(
+                                    f"HTTP {response.status_code} downloading media from {urlparse(url).hostname}.",
+                                    status_code=response.status_code,
+                                    url=url,
+                                )
+
+                            content_type = response.headers.get("content-type", "application/octet-stream")
+                            payload = bytearray()
+                            # v1.1.0: iter_bytes() decodes Content-Encoding (gzip/deflate/br);
+                            # iter_raw() would corrupt compressed media bodies.
+                            for chunk in response.iter_bytes(65536):
+                                payload.extend(chunk)
+                                # Audit R6-20: hard cap on in-memory downloads (decoded size).
+                                if len(payload) > MEDIA_MAX_BYTES:
+                                    # R7-12: fatal — do not retry (avoids re-downloading
+                                    # the oversized media up to `retries` more times).
+                                    raise BooruNetworkError(
+                                        f"Media from {urlparse(url).hostname} exceeds the "
+                                        f"{MEDIA_MAX_BYTES // (1024 * 1024)} MiB safety limit.",
+                                        url=url,
+                                        retryable=False,
+                                    )
+                        return bytes(payload), content_type
+                    else:
+                        # Loop exhausted without break/return: every hop was a redirect.
+                        raise BooruNetworkError(
+                            f"Too many redirects (>{MAX_REDIRECT_HOPS}) from {urlparse(url).hostname}.",
+                            url=url,
+                            retryable=False,
+                        )
 
                 except BooruNetworkError as err:
                     last_err = err
-                    # R7-12: fatal errors (status None: size cap / SSRF guard) and
-                    # non-429 4xx responses are raised immediately, no retry.
+                    # R7-12: fatal errors (size cap / SSRF guard) and non-429 4xx
+                    # responses are raised immediately, no retry.
                     if not err.retryable or (err.status_code and 400 <= err.status_code < 500 and err.status_code != 429):
                         raise
                     if attempt < retries:

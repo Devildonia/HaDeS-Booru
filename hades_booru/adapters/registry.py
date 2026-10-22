@@ -1,6 +1,6 @@
 """
 Adapter Registry & Intelligent URL Auto-Detection.
-Catalogues all 27 supported boorus and art platforms across 7 API families, detects direct post links
+Catalogues all 28 supported boorus and art platforms across 7 API families, detects direct post links
 vs listing/search URLs, and extracts query tags automatically.
 """
 
@@ -144,7 +144,7 @@ class AdapterRegistry:
             )
 
         # =====================================================================
-        # FAMILY 5: Philomena Engine (Derpibooru)
+        # FAMILY 5: Philomena Engine (Derpibooru, Furbooru)
         # =====================================================================
         derpi = PhilomenaAdapter("derpibooru", "Derpibooru", "derpibooru.org")
         self.register(
@@ -157,6 +157,28 @@ class AdapterRegistry:
                 description="Philomena JSON API image board.",
                 categorized_tags=True,
                 supports_pagination=True,
+            ),
+        )
+
+        # v1.1.1: Furbooru (furry art) shares the Philomena API; anonymous search
+        # is supported (verified live: /api/v1/json/search/images returns JSON).
+        # Rating filtering is client-side only (the API has no rating filter).
+        furbooru = PhilomenaAdapter("furbooru", "Furbooru", "furbooru.org")
+        self.register(
+            furbooru,
+            BooruSourceSpec(
+                id=furbooru.id,
+                name=furbooru.name,
+                domain=furbooru.default_domain,
+                default_endpoint="/api/v1/json/search/images",
+                description="Furry art booru (Philomena JSON API).",
+                categorized_tags=True,
+                supports_pagination=True,
+                api_family="philomena",
+                auth_required=False,
+                supports_tags=True,
+                supports_rating_filter=False,
+                status="active",
             ),
         )
 

@@ -422,6 +422,9 @@ footer {{
     border-radius: var(--hb-radius-control);
     padding: 10px 14px;
     min-height: 74px;
+    /* Audit R7-E: allow the flex item to shrink and wrap long text (URLs, tag
+    chains) instead of clipping it at narrow viewports. */
+    min-width: 0;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -449,7 +452,10 @@ footer {{
     color: var(--hb-text-primary);
     line-height: 1.3;
     white-space: normal;
-    overflow-wrap: break-word;
+    /* Audit R7-E: `anywhere` breaks inside long unbroken tokens (URLs, tag
+    chains) that `break-word` would still clip. */
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }}
 
 /* 3. Tab 1: Symmetric Split-Pane Gallery & Inspector (660px coordinated height) */
@@ -461,13 +467,15 @@ footer {{
     background: var(--hb-bg-surface);
     border: 1px solid var(--hb-border-subtle);
     border-radius: var(--hb-radius-control);
-    /* Audit R6-27: min-height + nowrap so the badge never wraps/splits at narrow widths */
+    /* Audit R6-27: min-height so the badge keeps a stable height. */
     min-height: 36px;
     height: auto;
     max-width: 100%;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    /* Audit R7-E: the old nowrap + ellipsis CLIPPED the counter text at narrow
+    viewports (screenshot evidence). Wrap instead of truncate. */
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
     display: flex;
     align-items: center;
     justify-content: center;

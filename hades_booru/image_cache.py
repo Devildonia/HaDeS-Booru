@@ -21,6 +21,10 @@ from hades_booru.models import ImageQuality, Post
 
 DEFAULT_CACHE_DIR = Path(".cache/gallery")
 BROWSER_SAFE_EXTS: frozenset[str] = frozenset({".jpg", ".png", ".webp", ".gif", ".avif"})
+# Audit R7-G: the file-count cap alone is not a disk bound — 600 files × up to
+# the 512 MiB media cap is theoretical ~300 GiB. A byte cap makes the cache
+# bounded in both dimensions. 4 GiB holds hundreds of high-res originals.
+DEFAULT_MAX_CACHE_BYTES = 4 * 1024 * 1024 * 1024  # 4 GiB
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +32,16 @@ logger = logging.getLogger(__name__)
 class DiskImageCache:
     """Bounded local disk cache for gallery image files."""
 
-    def __init__(self, cache_dir: Path = DEFAULT_CACHE_DIR, max_files: int = 600) -> None:
+    def __init__(
+        self,
+        cache_dir: Path = DEFAULT_CACHE_DIR,
+        max_files: int = 600,
+        max_bytes: int = DEFAULT_MAX_CACHE_BYTES,
+    ) -> None:
         self._dir = cache_dir
         self._max_files = max_files
+        # Audit R7-G: hard disk bound in addition to the file-count bound.
+        self._max_bytes = max_bytes
         self._lock = threading.Lock()
         self._dir.mkdir(parents=True, exist_ok=True)
 
@@ -127,19 +138,41 @@ class DiskImageCache:
         return str(err_card.resolve()), caption
 
     def prune_if_needed(self) -> None:
-        """Prunes oldest cached files if directory exceeds max_files."""
+        """Prunes oldest cached files if the directory exceeds max_files OR max_bytes.
+
+        Audit R7-G: the byte bound is what actually protects the disk — the file
+        count cap alone allows a theoretical ~300 GiB (600 × 512 MiB media cap).
+        """
         with self._lock:
             try:
-                files = [p for p in self._dir.iterdir() if p.is_file()]
-                if len(files) <= self._max_files:
+                files: list[Path] = []
+                total_bytes = 0
+                for p in self._dir.iterdir():
+                    if not p.is_file():
+                        continue
+                    try:
+                        st = p.stat()
+                    except OSError:
+                        continue
+                    files.append(p)
+                    total_bytes += st.st_size
+                if len(files) <= self._max_files and total_bytes <= self._max_bytes:
                     return
                 files.sort(key=lambda p: p.stat().st_mtime)
-                to_remove = files[: len(files) - self._max_files]
-                for old_file in to_remove:
+                removed = 0
+                for old_file in files:
+                    if len(files) - removed <= self._max_files and total_bytes <= self._max_bytes:
+                        break
+                    try:
+                        size = old_file.stat().st_size
+                    except OSError:
+                        size = 0
                     try:
                         old_file.unlink()
                     except OSError:
                         pass
+                    removed += 1
+                    total_bytes = max(0, total_bytes - size)
             except OSError:
                 pass
 

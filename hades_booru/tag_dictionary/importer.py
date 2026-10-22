@@ -160,16 +160,29 @@ class TagDictionaryImporter:
         tag_records: dict[str, SeedTagEntry] = {}
         page = 1
         while len(tag_records) < target:
-            raw_tags = self._fetch_json(
-                f"{self.base_url}/tags.json",
-                {
-                    "limit": limit,
-                    "page": page,
-                    "search[order]": "count",
-                    "search[hide_empty]": "yes",
-                },
-                auth,
-            )
+            # Audit R7-H: a failed tag-list page (after the client's own 429/5xx
+            # retries) must not discard the tags already collected — log and
+            # continue with a partial catalog instead of aborting the whole
+            # import with nothing persisted.
+            try:
+                raw_tags = self._fetch_json(
+                    f"{self.base_url}/tags.json",
+                    {
+                        "limit": limit,
+                        "page": page,
+                        "search[order]": "count",
+                        "search[hide_empty]": "yes",
+                    },
+                    auth,
+                )
+            except Exception as err:  # noqa: BLE001 - partial import beats no import
+                logger.warning(
+                    "Danbooru importer: tag-list page %d failed (%s); continuing with %d tags collected.",
+                    page,
+                    err,
+                    len(tag_records),
+                )
+                break
             if not isinstance(raw_tags, list) or not raw_tags:
                 break
 
@@ -228,6 +241,10 @@ class TagDictionaryImporter:
             self._pause()
 
             if idx % 50 == 0:
+                # Audit R7-H: persist progress in chunks so a crash (or a Ctrl-C)
+                # mid-import keeps everything already enriched. upsert_entries is
+                # idempotent, so the final upsert below stays correct.
+                self.service.upsert_entries(list(tag_records.values()))
                 logger.info(
                     "Danbooru importer progress: %d/%d tags enriched (resumed %d, wiki ok %d, aliases %d).",
                     idx,
@@ -238,6 +255,9 @@ class TagDictionaryImporter:
                 )
 
         # ------------------------------------------------------------- 4) Persist results
+        # (Audit R7-H: intermediate checkpoints above already upserted in-flight
+        # batches; this final upsert is idempotent and covers the last partial
+        # chunk plus any resumed entries.)
         written = self.service.upsert_entries(list(tag_records.values()))
 
         logger.info(

@@ -5,6 +5,30 @@ Current version, features, and quick start: see [README](README.md).
 
 ---
 
+## v1.1.1
+
+**Security-hardening & source-coverage release** — closes every verified item of the R7 external audit (R7-A through R7-H, with R7-F accepted and documented as a limitation) and adds a new Booru source with an explicit capability model.
+
+**Security & Correctness (R7 audit fixes)**
+
+- **Redirect SSRF guard actually fires now (R7-A, High)**: the old httpx event-hook guard could never run (httpx populates `response.next_request` only after the hook), so a `302` to `http://127.0.0.1` slipped past the SSRF block. `HttpClient` now follows redirects manually (`follow_redirects=False`, max 5 hops) and re-validates **every** hop with the public-host guard before the next request leaves the process. A hostile redirect chain raises a non-retryable error instead of leaking credentials or probing the LAN. Three regression tests cover the malicious hop, a legitimate public hop, and the hop cap.
+- **Config merge no longer resurrects cleared state (R7-B)**: `ConfigManager.save()` now does a true 3-way field merge (base = snapshot at load, mine, disk) and re-bases the snapshot after each successful save. Consequences: reverting a scalar back to its loaded value works; an explicitly cleared list stays cleared; removing one item is not undone by the old union logic; session-only (`persist_credentials=False`) mode wipes exactly the entries this process touched and never another instance's; the cross-instance credential wipe (R7-01) and N5 clear contract both hold. Six scenario tests pin this behavior.
+- **CI vulnerability review kept honest (R7-C)**: the `pip-audit` ignore list now covers all 35 known Pillow 12.x advisories with a dated review comment; a new test re-runs `pip-audit` and fails if any advisory is missing from the documented list, so the ignore list can never silently rot.
+- **Test suite is hermetic (R7-D)**: a new autouse `tests/conftest.py` fixture fakes DNS resolution (IP literals resolve to themselves, hostnames to a fixed public IP), so the SSRF tests and every guard path run identically online or offline. No more `Could not resolve host: example.com` flakes on machines without network.
+- **Long text no longer overflows the UI (R7-E)**: navigation badges and status boxes wrap instead of clipping/overflowing (`min-width: 0`, `overflow-wrap: anywhere`, `white-space: normal`), fixing the deformed Limit/Rating columns reported in the v1.1.0 review.
+- **Image cache is byte-bounded (R7-G)**: `DiskImageCache` now enforces `max_bytes` (default 4 GiB) in addition to the file-count cap — pruning oldest-first by either dimension — closing the theoretical ~300 GiB disk exposure of the count-only cap.
+- **Importer survives a dropped connection (R7-H)**: a failed tag-list page no longer aborts the whole import; the collector logs and continues with the partial catalog, and enrichment progress is upserted in idempotent 50-tag checkpoints so a crash (or Ctrl-C) mid-import keeps everything already enriched.
+- **R7-F (accepted limitation, documented)**: DNS-rebinding between the guard's lookup and httpx's connect is documented in `assert_public_host`; IP-pinned connections judged disproportionate for this app's threat model.
+
+**New Features**
+
+- **Furbooru source (Philomena family)**: `furbooru.org` is now a first-class source (28 total, 7 families), using the existing anonymous Philomena JSON API (`/api/v1/json/search/images`), exact-host URL detection, and the shared pagination engine. Verified live (HTTP 200 JSON, ~398k images) before registration.
+- **Source capability metadata**: `BooruSourceSpec` gains `api_family`, `auth_required`, `supports_tags`, `supports_rating_filter`, and `status` (all backward-compatible with safe defaults), so the catalog now records *what* each source supports — Furbooru is the first entry registered with the full model; a full catalog pass lands in a later v1.1.x release. E-Shuushuu was investigated and deferred: its search endpoint responds anonymously, but the posts endpoint could not be verified without an API key, so shipping it unverified would break the no-broken-sources policy.
+
+**Tests**
+
+- 13 new regression tests in `tests/test_audit_r7_round2.py` (redirect guard, 3-way merge scenarios, CSS wrapping, byte pruning, importer partial + checkpoints, CI ignore-list parity, Furbooru metadata) plus the hermetic DNS fixture. **225 tests, all green; `ruff` clean; `mypy` clean (32 files).**
+
 ## v1.1.0
 
 **Major feature & architectural release** — closes every item on the v1.1.0 roadmap: offline SQLite Tag Dictionary, selectable Light/Dark/System theme with locally bundled fonts, per-session personal lists under `--share`, 3-layer DAPI tag categorization, shared adapter pagination (`R6-24`), modular UI package split (`R6-25`), and CI hardening (`R6-08`).
