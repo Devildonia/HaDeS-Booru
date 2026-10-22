@@ -1,5 +1,5 @@
 """
-Verification tests for the v1.1.0 UI Overhaul (§4 of ROADMAP.md & Audit R6-17):
+Verification tests for the v1.1.0 UI Overhaul (Audit R6-17):
 - Mathematical WCAG 2.1 AA contrast verification (>= 4.5:1) for both Dark and Light palettes
 - Offline bundled fonts (`Inter` and `JetBrains Mono` WOFF2 + `OFL.txt`, zero Google Fonts)
 - Zero hardcoded inline theme colors in `components.py`

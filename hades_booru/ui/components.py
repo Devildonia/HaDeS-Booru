@@ -18,7 +18,7 @@ from hades_booru import __version__
 from hades_booru.i18n import t
 from hades_booru.models import ExtractedImageMeta, Language, Post
 from hades_booru.normalizer import PromptNormalizer, normalize_tag_key, parse_tag_list
-from hades_booru.tag_dictionary.service import TagRecord
+from hades_booru.tag_dictionary.service import TagRecord, get_tag_dictionary
 
 RATING_CLASSES: dict[str, str] = {
     "g": "hades-rating-g",
@@ -314,6 +314,18 @@ def render_post_inspector_html(
     """
 
 
+def _available_count_html(lang: str) -> str:
+    """Renders a high-value line showing how many tags are in the local catalog (empty string if unknown)."""
+    try:
+        tag_count, _ = get_tag_dictionary().count()
+    except Exception:  # noqa: BLE001 - rendering must never break on a dictionary hiccup
+        return ""
+    if tag_count <= 0:
+        return ""
+    text = html.escape(t(lang, "dict_available_count", n=tag_count))
+    return f'<p class="hades-empty-desc hades-dict-count">{text}</p>'
+
+
 def render_tag_dictionary_html(
     record: TagRecord | None,
     query: str = "",
@@ -333,6 +345,7 @@ def render_tag_dictionary_html(
           <div class="hades-empty-state">
             <p class="hades-empty-title">{title}</p>
             <p class="hades-empty-desc">{desc}</p>
+            {_available_count_html(lang)}
           </div>
         </div>
         """

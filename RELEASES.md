@@ -1,6 +1,6 @@
 # Release Notes
 
-Version-by-version history for **HaDeS Booru**, newest first.
+Version-by-version history, design decisions, and release conventions for **HaDeS Booru**, newest first.
 Current version, features, and quick start: see [README](README.md).
 
 ---
@@ -11,24 +11,24 @@ Current version, features, and quick start: see [README](README.md).
 
 **New Features**
 
-- **Offline Tag Dictionary (§1)**: new `hades_booru/tag_dictionary/` package backed by a local SQLite catalog (`tags.sqlite3`, auto-seeded on first query with 85+ curated Danbooru entries and 40+ common aliases, gitignored) plus a standalone CLI importer (`python -m hades_booru.tag_dictionary.importer`) to fetch expanded tag/alias/wiki catalogs from the Danbooru API without blocking app startup. Exact-match and alias lookups (`miku` -> `hatsune_miku`, `1_girl` -> `1girl`) resolve in sub-millisecond time. Bilingual support follows strict rules: original English definitions are always stored as-is, and Spanish definitions are shown only when a genuine translation exists (never auto-translated). Exposed in a new **Tag Dictionary** (`Diccionario de Tags`) tab with quick-tag chips and Danbooru wiki links.
+- **Offline Tag Dictionary (§1)**: new `hades_booru/tag_dictionary/` package backed by a local SQLite catalog (`tags.sqlite3`, auto-seeded on first query with 85+ curated Danbooru entries and 40+ common aliases, gitignored) plus a resumable, rate-limited, fault-isolated CLI importer (`python -m hades_booru.tag_dictionary.importer --top 1000`) that grows the catalog to the 1,000 most popular Danbooru tags (`--resume` / `--no-resume` / `--skip-wiki`) without blocking app startup, cleaning DText wiki markup (including template-macro stripping) as it imports. Exact-match and alias lookups (`miku` -> `hatsune_miku`, `1_girl` -> `1girl`) resolve in sub-millisecond time. Bilingual support follows strict rules: original English definitions are always stored as-is, and Spanish definitions are shown only when a genuine translation exists (never auto-translated). Exposed in a new **Tag Dictionary** (`Diccionario de Tags`) tab with quick-tag chips, Danbooru wiki links, and a live indicator of how many tags are available in the local catalog.
 - **Selectable Light / Dark / System Theme & Offline Fonts (§4, R6-17)**: added `ThemeMode` (`dark`, `light`, `system`) to `AppConfig`, persisted in `config.local.json` and switchable live from the top bar. Both Dark (`#0B0D13` canvas) and Light (`#F8FAFC` canvas) palettes are defined via semantic CSS custom properties with verified WCAG AA contrast ($\ge 4.5:1$) across all text tokens and category badges. `System (Auto)` honors `prefers-color-scheme` on load and reacts live to OS theme switches. `Inter` and `JetBrains Mono` WOFF2 fonts (plus `OFL.txt`) are bundled locally under `hades_booru/ui/assets/fonts/` and served via `@font-face` data URIs, eliminating external `fonts.googleapis.com` requests.
 - **Per-Session Personal Lists under `--share` (§2 / X8 / R6-12)**: new `SessionLists` and `PersonalListStore` in `hades_booru/ui/state.py`. When launched with `python app.py --share`, personal blacklist, whitelist, and default junk overrides live exclusively in per-session `gr.State` so remote visitors cannot see or mutate the host's `config.local.json` or each other's lists. Local (non-share) mode preserves full disk persistence.
 - **3-Layer DAPI Tag Categorization (§3 / X9 / R6-13)**: `GelbooruAdapter._categorize_dapi_tags` now classifies flat Gelbooru/DAPI tags through three layers:
   1. Expanded suffix heuristics with explicit general exemptions (`_(color)`, `_(pose)`, `_(position)`, `_(style)`, `_(clothing)`, `_(attire)`, `_(outfit)`, `_(expression)`, `_(emotion)`, `_(object)`, `_(weapon)`, `_(food)`, `_(vehicle)`, `_(animal)`, `_(creature)`, `_(background)`, `_(lighting)`, `_(framing)`, `_(focus)`, `_(count)`, `_(meme)`, `_(parody)`, `_(voice_actor)`, `_(seiyuu)`), `_(artist)` / `drawn_by_*` -> `artist`, and franchise suffixes -> `copyright`.
   2. Single-query SQLite batch lookup (`TagDictionaryService.batch_categories`) for non-parenthesized `artist`, `copyright`, and `character` tags.
-  3. Optional thread-safe LRU cache (`DapiTagCategoryCache`) for the DAPI `s=tag&q=index` endpoint.
+  3. Optional thread-safe LRU cache (`DapiTagCategoryCache`) for the DAPI `s=tag&q=index` endpoint. New, unindexed DAPI tags with ambiguous parenthesized qualifiers intentionally fall back to `character`/`general` (documented limitation, not a bug).
 
 **Architecture & CI Hardening**
 
 - **Shared Adapter Pagination (`R6-24`)**: extracted `BooruAdapter.paginate()` into `hades_booru/adapters/base.py`, removing 6 duplicated pagination loops across `danbooru`, `gelbooru`, `e621`, `moebooru`, `philomena`, and `zerochan` while preserving each family's specific stop condition and partial-result warning behavior.
 - **Modular UI Package (`R6-25`)**: split `hades_booru/ui/layout.py` into focused modules (`state.py`, `desktop.py`, `handlers.py`, `layout.py`, `components.py`, `theme.py`) and removed hardcoded inline hex colors from `components.py` in favor of semantic CSS classes.
 - **CI Hardening (`R6-08`)**: `.github/workflows/ci.yml` now pins GitHub Actions to full commit SHAs (`actions/checkout@11bd7190...`, `actions/setup-python@a26af69b...`), adds Python `3.13` to the OS/version matrix, adds dedicated `mypy` typecheck and `pytest-cov` (`--cov-fail-under=80`) jobs, and runs `pip-audit` on a weekly cron schedule (`0 6 * * 1`).
-- **Tests**: 22 new tests across 5 new test modules (`test_paginate_refactor.py`, `test_tag_dictionary.py`, `test_session_personal_lists.py`, `test_dapi_categorization.py`, `test_theme_and_ui_overhaul.py`). **165 tests, all green; `ruff` clean.**
+- **Tests**: new coverage across 5 test modules (`test_paginate_refactor.py`, `test_tag_dictionary.py`, `test_session_personal_lists.py`, `test_dapi_categorization.py`, `test_theme_and_ui_overhaul.py`), including the resumable importer and the dictionary count-line rendering. **212 tests, all green; `ruff` clean; `mypy` clean (32 files).**
 
 ## v1.0.7
 
-**Post-release audit (R6) hardening** — the most exhaustive audit of the codebase so far (static analysis, real-browser E2E, dependency audit, coverage). 1 High + 6 Medium + 20 Low findings; all High/Medium and the practical Lows are fixed here, the rest is recorded in [ROADMAP.md](ROADMAP.md).
+**Post-release audit (R6) hardening** — the most exhaustive audit of the codebase so far (static analysis, real-browser E2E, dependency audit, coverage). 1 High + 6 Medium + 20 Low findings; all High/Medium and the practical Lows are fixed here; the remainder are accepted as documented, low-impact limitations.
 
 **Security (High + Medium)**
 
@@ -62,7 +62,7 @@ Current version, features, and quick start: see [README](README.md).
 - 18 new regression tests (`tests/test_audit_r6.py`): malicious-URL rejection by every adapter, GIF-as-PNG rejection, SSRF guard + env override, history query scrub, poisoned-cache recovery, multi-instance config merge, rating-flag reset, `javascript:` href, ZIP-error reset, launcher `cd /d`, timestamped filenames with collision suffix, magic-first extension, `schema_version`.
 - Shared streaming HTTP mocks extracted to `tests/http_mocks.py`. **143 tests, all green; `ruff` clean; CI `pip-audit` command verified passing.**
 
-**Deferred to v1.1.0** (see [ROADMAP.md](ROADMAP.md)): CI hardening (R6-08), local font bundling (R6-17), pagination dedup (R6-24), `layout.py` split (R6-25). The Rule34.us scraper rating is intentionally conservative (R6-21) — documented as a known limitation, not a bug.
+**Deferred to v1.1.0** (now shipped in the v1.1.0 release above): CI hardening (R6-08), local font bundling (R6-17), pagination dedup (R6-24), `layout.py` split (R6-25). The Rule34.us scraper rating is intentionally conservative (R6-21) — documented as a known limitation, not a bug.
 
 ## v1.0.6
 
@@ -156,3 +156,11 @@ Current version, features, and quick start: see [README](README.md).
 - Kaomoji detection now accepts pipe characters (`(|_|)`, `(o|_o)`); Art Platform metadata is HTML-unescaped and URL-resolved; "open folder in explorer" works on Windows, Linux and macOS.
 - Moebooru posts rated `g` are no longer mis-mapped to "unrated".
 - `gradio` is pinned to the `6.x` major line.
+
+---
+
+## Release Conventions
+
+- Every version ships with: updated `pyproject.toml`, `hades_booru/__init__.py`, `README.md` header, and launchers (`start.bat` pure ASCII + CRLF, `start.sh`); full test suite green; `ruff` and `mypy` clean.
+- Release notes live in this file (newest first); the `README` links to it.
+- Post-release fixes land on `master` without a new release and are recorded under the affected version.

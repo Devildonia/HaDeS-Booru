@@ -343,6 +343,22 @@ class TagDictionaryService:
 
         return result
 
+    def all_tag_names(self) -> set[str]:
+        """Returns the set of all canonical tag names stored in the local catalog.
+
+        Used by the importer's `--resume` mode to skip re-fetching tags that are
+        already present (single round-trip query, no per-tag round trips).
+        """
+        self.ensure_initialized()
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute("SELECT name FROM tags").fetchall()
+                return {str(r["name"]) for r in rows}
+            finally:
+                if conn is not self._memory_conn:
+                    conn.close()
+
     def count(self) -> tuple[int, int]:
         """Returns `(tag_count, alias_count)` stored in the local catalog."""
         self.ensure_initialized()

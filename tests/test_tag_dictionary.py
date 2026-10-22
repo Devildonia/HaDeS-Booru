@@ -146,6 +146,20 @@ def test_strip_dtext_cleans_wiki_markup() -> None:
     assert "Hatsune Miku is a Vocaloid developed by Crypton Future Media with twintails." == cleaned
 
 
+def test_strip_dtext_removes_template_macros() -> None:
+    # v1.1.0: DText template macros ({{mpixels:...}}, nested macros) must not leak into definitions.
+    raw = (
+        "An image at least 1600 pixels wide or 1200 pixels tall. "
+        "Approximately equivalent to {{mpixels:>=1.9}}. "
+        "Also see {{outer:{{inner:x}}}} here."
+    )
+    cleaned = strip_dtext(raw)
+    assert "{{" not in cleaned
+    assert "}}" not in cleaned
+    assert "mpixels" not in cleaned
+    assert "An image at least 1600 pixels wide or 1200 pixels tall. Approximately equivalent to." in cleaned
+
+
 def test_importer_ingests_tags_wikis_and_aliases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -173,7 +187,7 @@ def test_importer_ingests_tags_wikis_and_aliases(
 
     monkeypatch.setattr("hades_booru.tag_dictionary.importer.http_client.get_json", fake_get_json)
 
-    count = importer.import_from_danbooru(max_pages=1, page_size=10)
+    count = importer.import_from_danbooru(max_pages=1, page_size=10, throttle=0)
     assert count == 2
 
     rec = svc.lookup("frieren_(character)")
@@ -184,3 +198,157 @@ def test_importer_ingests_tags_wikis_and_aliases(
     assert "Elven mage from Frieren: Beyond Journey's End." in rec.body_en
     assert rec.body_es is None
     assert normalize_dict_query("Frieren (Character)") == "frieren_(character)"
+
+
+def test_importer_respects_top_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    svc = TagDictionaryService(db_path=tmp_path / "top.sqlite3", auto_seed=False)
+    importer = TagDictionaryImporter(service=svc, base_url="https://danbooru.donmai.us")
+
+    def fake_get_json(url: str, params: dict[str, Any] | None = None, auth: Any = None) -> Any:
+        if url.endswith("/tags.json"):
+            return [{"name": f"tag_{i}", "category": 0, "post_count": 100 - i} for i in range(10)]
+        if url.endswith("/wiki_pages.json"):
+            return [{"title": "x", "body": "A definition."}]
+        if url.endswith("/tag_aliases.json"):
+            return []
+        return []
+
+    monkeypatch.setattr("hades_booru.tag_dictionary.importer.http_client.get_json", fake_get_json)
+
+    count = importer.import_from_danbooru(top=4, page_size=10, throttle=0)
+    assert count == 4
+    assert svc.all_tag_names() == {"tag_0", "tag_1", "tag_2", "tag_3"}
+
+
+def test_importer_skip_wiki_omits_bodies_but_keeps_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    svc = TagDictionaryService(db_path=tmp_path / "nowiki.sqlite3", auto_seed=False)
+    importer = TagDictionaryImporter(service=svc, base_url="https://danbooru.donmai.us")
+    wiki_calls = {"n": 0}
+
+    def fake_get_json(url: str, params: dict[str, Any] | None = None, auth: Any = None) -> Any:
+        if url.endswith("/tags.json"):
+            return [{"name": "frieren", "category": 4, "post_count": 95000}]
+        if url.endswith("/wiki_pages.json"):
+            wiki_calls["n"] += 1
+            return [{"title": "frieren", "body": "Should never be stored."}]
+        if url.endswith("/tag_aliases.json"):
+            return [{"antecedent_name": "frie", "consequent_name": "frieren"}]
+        return []
+
+    monkeypatch.setattr("hades_booru.tag_dictionary.importer.http_client.get_json", fake_get_json)
+
+    count = importer.import_from_danbooru(top=1, skip_wiki=True, throttle=0)
+    assert count == 1
+    assert wiki_calls["n"] == 0, "skip_wiki must not issue any wiki_pages requests"
+
+    rec = svc.lookup("frie")
+    assert rec is not None
+    assert rec.name == "frieren"
+    assert rec.category == "character"
+    assert rec.body_en == "", "wiki body must be empty when skip_wiki is set"
+    assert rec.resolved_from == "frie", "aliases must still be imported"
+
+
+def test_importer_resume_skips_already_stored_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    svc = TagDictionaryService(db_path=tmp_path / "resume.sqlite3", auto_seed=False)
+    importer = TagDictionaryImporter(service=svc, base_url="https://danbooru.donmai.us")
+
+    svc.upsert_entries(
+        [
+            {
+                "name": "frieren",
+                "category": "character",
+                "post_count": 10,
+                "body_en": "Already stored definition.",
+                "body_es": None,
+                "aliases": [],
+            }
+        ]
+    )
+    wiki_calls = {"n": 0}
+
+    def fake_get_json(url: str, params: dict[str, Any] | None = None, auth: Any = None) -> Any:
+        if url.endswith("/tags.json"):
+            return [
+                {"name": "frieren", "category": 4, "post_count": 95000},
+                {"name": "sousou_no_frieren", "category": 3, "post_count": 120000},
+            ]
+        if url.endswith("/wiki_pages.json"):
+            wiki_calls["n"] += 1
+            return [{"title": "x", "body": "A definition."}]
+        if url.endswith("/tag_aliases.json"):
+            return []
+        return []
+
+    monkeypatch.setattr("hades_booru.tag_dictionary.importer.http_client.get_json", fake_get_json)
+
+    count = importer.import_from_danbooru(top=2, resume=True, throttle=0)
+    assert count == 2
+    assert wiki_calls["n"] == 1, "resume must skip the wiki fetch for already-stored tags"
+
+    rec = svc.lookup("frieren")
+    assert rec is not None
+    assert rec.body_en == "Already stored definition."
+
+
+def test_importer_isolates_per_tag_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    svc = TagDictionaryService(db_path=tmp_path / "fail.sqlite3", auto_seed=False)
+    importer = TagDictionaryImporter(service=svc, base_url="https://danbooru.donmai.us")
+
+    def fake_get_json(url: str, params: dict[str, Any] | None = None, auth: Any = None) -> Any:
+        if url.endswith("/tags.json"):
+            return [
+                {"name": "broken_tag", "category": 0, "post_count": 100},
+                {"name": "good_tag", "category": 0, "post_count": 50},
+            ]
+        if url.endswith("/wiki_pages.json"):
+            title = (params or {}).get("search[title]")
+            if title == "broken_tag":
+                raise RuntimeError("simulated network failure")
+            return [{"title": title, "body": "Good definition."}]
+        if url.endswith("/tag_aliases.json"):
+            return []
+        return []
+
+    monkeypatch.setattr("hades_booru.tag_dictionary.importer.http_client.get_json", fake_get_json)
+
+    count = importer.import_from_danbooru(top=2, throttle=0)
+    assert count == 2
+    assert svc.lookup("good_tag") is not None and svc.lookup("good_tag").body_en == "Good definition."
+    assert svc.lookup("broken_tag") is not None
+    assert svc.lookup("broken_tag").body_en == ""
+
+
+def test_available_count_html_renders_and_degrades_safely(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The dictionary count line renders the catalog size in both languages and degrades to an
+    empty string when the catalog is empty or the dictionary cannot be read (never breaks render)."""
+    from hades_booru.ui import components
+
+    class _StubService:
+        def __init__(self, count: tuple[int, int]) -> None:
+            self._count = count
+
+        def count(self) -> tuple[int, int]:
+            return self._count
+
+    # Normal case: shows the tag count in English and Spanish.
+    monkeypatch.setattr(components, "get_tag_dictionary", lambda: _StubService((5, 10)))
+    en_html = components._available_count_html("en")
+    assert "hades-dict-count" in en_html
+    assert "5 tags" in en_html
+    assert "5 tags" in components._available_count_html("es")
+
+    # Empty catalog: render nothing rather than a misleading "0 tags ..." line.
+    monkeypatch.setattr(components, "get_tag_dictionary", lambda: _StubService((0, 0)))
+    assert components._available_count_html("en") == ""
+
+    # Dictionary hiccup: must never break rendering.
+    def _raise() -> Any:
+        raise RuntimeError("simulated dictionary failure")
+
+    monkeypatch.setattr(components, "get_tag_dictionary", _raise)
+    assert components._available_count_html("en") == ""

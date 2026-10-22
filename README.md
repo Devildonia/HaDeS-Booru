@@ -49,8 +49,7 @@ HaDeS-Booru/
 ├── requirements.lock             # Locked dependency tree (reproducible installs, pip-audit in CI)
 ├── requirements-dev.txt          # Dev dependencies (pytest, pytest-cov, ruff, mypy)
 ├── pyproject.toml                # Project metadata, Ruff, Pytest, and Mypy configuration
-├── RELEASES.md                   # Version-by-version release notes (v1.0.0 -> latest)
-├── ROADMAP.md                    # Shipped milestones and architectural notes
+├── RELEASES.md                   # Version-by-version release notes, design decisions, and conventions (v1.0.0 -> latest)
 ├── LICENSE                       # MIT license
 ├── hades_booru/                  # Core package
 │   ├── models.py                 # Pydantic v2 domain models
@@ -112,13 +111,37 @@ python -m ruff check .
 python -m mypy hades_booru app.py
 ```
 
+### 4. Optional: Build the Offline Tag Dictionary from Danbooru
+
+The app ships with a curated offline seed catalog (38 foundational tags) so the Tag Dictionary
+works immediately with no network. To grow it to the **1,000 most popular Danbooru tags** (with
+live wiki definitions and canonical aliases) into the local SQLite file, run the one-off importer:
+
+```powershell
+python -m hades_booru.tag_dictionary.importer --top 1000
+```
+
+Useful options:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--top N` | `1000` | Import the `N` most popular tags (ranked by post count). |
+| `--skip-wiki` | off | Faster first pass: fetch tags + aliases only, skip wiki bodies. |
+| `--resume` | on | Skip tags already stored locally (re-runs only fetch what is new). |
+| `--no-resume` | off | Re-fetch wiki/aliases even for tags already stored. |
+| `--seed-only` | off | Only seed the local DB with the built-in catalog (no network). |
+
+> **Rate-limit note**: the importer paces its requests to respect Danbooru's public limit
+> (~2 req/s unauthenticated, ~4 req/s with an API key) and prints an estimated duration before
+> starting. A full 1,000-tag import makes ~2,000 API calls and takes roughly 15–20 minutes
+> unauthenticated, or ~8 minutes with a Danbooru API key (add one in Settings for ~2x speed).
+> It is resumable and fault-isolated: a single failing tag is logged and skipped without aborting
+> the run, and a summary reports exactly how many tags, wiki bodies, and aliases were imported.
+> The importer never runs automatically at app startup.
+
 ## Release Notes
 
-Full version-by-version history (v1.0.0 -> latest): see [RELEASES.md](RELEASES.md).
-
-## Roadmap
-
-See [ROADMAP.md](ROADMAP.md) for shipped milestones and architectural conventions.
+Full version-by-version history, design decisions, and release conventions: see [RELEASES.md](RELEASES.md).
 
 ## License
 
