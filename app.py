@@ -27,7 +27,7 @@ from pathlib import Path
 #    analytics_enabled=False explicitly when the parameter exists.
 os.environ["GRADIO_ANALYTICS_ENABLED"] = "false"
 
-from hades_booru.ui.layout import create_gradio_app
+from hades_booru.ui.layout import _EXTRACT_DROP_SURFACE_JS, create_gradio_app
 from hades_booru.ui.theme import CUSTOM_CSS, create_hades_theme
 
 DEFAULT_PORT = 7863
@@ -92,6 +92,9 @@ def main() -> None:
 
     app = create_gradio_app(share_mode=args.share)
     try:
+        # Gradio 6 moved the page-level `js` hook from Blocks() to launch().
+        # This restores the drop-to-replace surface on the Image-to-Prompt
+        # file component (see layout._EXTRACT_DROP_SURFACE_JS).
         app.launch(
             server_name=args.host,
             server_port=chosen_port,
@@ -100,6 +103,7 @@ def main() -> None:
             theme=create_hades_theme(),
             css=CUSTOM_CSS,
             favicon_path=favicon,
+            js=_EXTRACT_DROP_SURFACE_JS,
         )
     except OSError as err:
         # The port was free during the probe but got taken in the meantime (TOCTOU race)

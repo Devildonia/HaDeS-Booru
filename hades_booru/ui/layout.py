@@ -75,6 +75,58 @@ __all__ = [
 ]
 
 
+_EXTRACT_DROP_SURFACE_JS = """
+(() => {
+  // Gradio 6.30 File component regression: once a file is loaded the native
+  // drop zone (button.upload-container) shrinks to a 16px corner icon and the
+  // visible file row stops accepting drops. This extends the drop surface to
+  // the whole Image-to-Prompt tab (the subheading literally says "Drop an
+  // image here") by retargeting file drops onto the upload button, whose
+  // handler (and our .change wiring, newest-file-wins) already works.
+  // Anchored to #hades-extract-file so other File components are untouched.
+  // Tabs render lazily, so we poll until the target exists.
+  const MARK = '__hadesDropRT';
+  const setup = () => {
+    const input = document.getElementById('hades-extract-file');
+    if (!input) return false;
+    let surface = input;
+    while (surface && !(String(surface.className || '').includes('tabitem'))) surface = surface.parentElement;
+    if (!surface) {
+      surface = input;
+      while (surface && !(String(surface.className || '').includes('block'))) surface = surface.parentElement;
+    }
+    if (!surface || surface.__hadesDropFix) return true;
+    surface.__hadesDropFix = true;
+    const hasFiles = (e) => !!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'));
+    const retarget = (e) => {
+      const btn = surface.querySelector('button.upload-container');
+      if (!btn) return;
+      const clone = new DragEvent(e.type, { bubbles: true, cancelable: true, dataTransfer: e.dataTransfer });
+      clone[MARK] = true;
+      btn.dispatchEvent(clone);
+    };
+    surface.addEventListener('dragenter', (e) => { if (hasFiles(e)) e.preventDefault(); }, true);
+    surface.addEventListener('dragover', (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    }, true);
+    surface.addEventListener('drop', (e) => {
+      if (!hasFiles(e) || e[MARK]) return;
+      e.preventDefault();
+      e.stopPropagation();
+      retarget(e);
+    }, true);
+    return true;
+  };
+  let tries = 0;
+  const timer = setInterval(() => {
+    if (setup() || ++tries > 120) clearInterval(timer);
+  }, 500);
+})();
+"""
+
+
 def _make_blocks() -> gr.Blocks:
     """Build the Gradio Blocks root with telemetry disabled.
 
@@ -478,6 +530,11 @@ def create_gradio_app(share_mode: bool = False) -> gr.Blocks:
                     label=t(lang, "extract_file_label"),
                     file_count="multiple",
                     file_types=[".png", ".jpg", ".jpeg", ".webp"],
+                    # elem_id anchors the JS drop-surface extension (see
+                    # _make_blocks): Gradio 6.30 shrinks the drop zone to a 16px
+                    # icon once a file is loaded, so we retarget drops made on
+                    # the visible file row back to the upload button.
+                    elem_id="hades-extract-file",
                 )
                 extract_preview = gr.Image(
                     label=t(lang, "extract_preview_label"),
