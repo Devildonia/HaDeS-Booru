@@ -3,4 +3,4 @@ HaDeS Booru — Universal Prompt Harvester, Tag Normalizer & LoRA Dataset Builde
 Diamond Standard Python + Gradio Architecture.
 """
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"

@@ -5,6 +5,24 @@ Current version, features, and quick start: see [README](README.md).
 
 ---
 
+## v1.1.2
+
+**Reliability & security follow-up release** — restores a v1.0.6-era behavior that regressed on Gradio 6.30 and closes every verified item of the R8 external audit (R8-A through R8-F).
+
+**Fixed**
+
+- **Drop-to-replace in Image to Prompt works again (regression)**: Gradio 6.30's Svelte File component shrinks its native drop zone to a 16 px corner icon as soon as a file is loaded, so dropping a new image on top of the existing one silently did nothing. A page-level script (wired through `launch(js=...)`, the Gradio 6 location for page JS) now extends the drop surface to the whole Image-to-Prompt tab and retargets file drops onto the upload button, whose handler and the newest-file-wins wiring already worked. Verified in a real browser (4 drop scenarios, extraction re-runs each drop) with three regression tests.
+- **Credentials never leak across origins (R8-A, Medium-High, security)**: the manual redirect following added in R7-A passed the user's Basic-Auth on **every** hop, so a compromised board or an open redirect on a legitimate one would receive the API key — behavior httpx itself prevents with `follow_redirects=True`. Credentials now travel only to the original origin (scheme + host + normalized default port); any cross-origin redirect hop goes unauthenticated. Same-origin hops (e.g. path upgrades) keep their credentials. Two regression tests pin both cases.
+- **Importer checkpoint no longer breaks `--resume` (R8-B, Medium)**: the 50-tag crash-safe checkpoint upserted **all** collected tags, including the not-yet-enriched tail; `resume` skips stored tags, so an interrupted import silently lost the rest forever. The checkpoint now persists only the tags already enriched, and the final upsert still covers everything. Regression test simulates a hard mid-import death (child process, `os._exit`) at tag 53 of 55 and asserts the tail is re-enriched — and actually recovered — on the next run.
+- **System Status no longer clips long text (R8-D, Low)**: the compact command-row `max-height`/`overflow: hidden` rules (added to fix the Gradio 6.30 stretch chain) also clipped the status readout ("Query comple…"). The status block now opts out via a dedicated `hades-status-block` class; wrapped summaries and long URLs render in full. Browser-verified (`max-height: none`, zero clipping with a long payload).
+- **Dependency hygiene (R8-C)**: `brotli` locked to 1.2.1 (fixes PYSEC-2026-4322 / GHSA-9v8h-qqgm-4m35 — it decodes remote `Content-Encoding: br` payloads); the two new Pillow 12.x advisory IDs join the documented, dated ignore list (still unfixable while Gradio 6 pins `pillow<13`). `pip-audit` on the locked set now reports **no known vulnerabilities**.
+- **Error context restored (R8-F)**: the "payload that is not valid JSON" error carries the offending URL again.
+- **Drift guard (R8-E)**: the two mirrored manual-redirect loops in `HttpClient` now cross-reference each other so a future edit cannot silently diverge them.
+
+**Tests**
+
+- 3 new regression tests (`tests/test_audit_r8.py`), 1 R7 test re-pinned to the corrected checkpoint semantics, `DummyClient` mock extended to record per-hop request attributes. **231 tests, all green; `ruff` clean; `mypy` clean (32 files); `pip-audit` clean (37 documented Pillow ignores).**
+
 ## v1.1.1
 
 **Security-hardening & source-coverage release** — closes every verified item of the R7 external audit (R7-A through R7-H, with R7-F accepted and documented as a limitation) and adds a new Booru source with an explicit capability model.
