@@ -375,7 +375,10 @@ def create_gradio_app(share_mode: bool = False) -> gr.Blocks:
                     label=t(lang, "lang_label"),
                     scale=2,
                 )
-                status_banner = gr.HTML(value=initial_status)
+                # Audit R8-D: `hades-status-block` opts this block out of the compact
+                # max-height rules in theme.py so wrapped status text (query summaries,
+                # long URLs) is never clipped.
+                status_banner = gr.HTML(value=initial_status, elem_classes=["hades-status-block"])
 
         # 3. Main Application Tabs
         with gr.Tabs():

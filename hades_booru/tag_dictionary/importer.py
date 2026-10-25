@@ -244,7 +244,11 @@ class TagDictionaryImporter:
                 # Audit R7-H: persist progress in chunks so a crash (or a Ctrl-C)
                 # mid-import keeps everything already enriched. upsert_entries is
                 # idempotent, so the final upsert below stays correct.
-                self.service.upsert_entries(list(tag_records.values()))
+                # Audit R8-B: checkpoint ONLY the tags already enriched. Persisting
+                # the unprocessed tail here would make `resume` (which skips every
+                # stored tag) silently drop it forever, because the importer only
+                # re-enriches tags absent from the database.
+                self.service.upsert_entries([tag_records[n] for n in to_enrich[:idx]])
                 logger.info(
                     "Danbooru importer progress: %d/%d tags enriched (resumed %d, wiki ok %d, aliases %d).",
                     idx,

@@ -408,6 +408,16 @@ footer {{
     height: auto !important;
     max-height: 114px !important;
 }}
+/* Audit R8-D: the status readout must grow with its content (wrapped query
+   summaries, long URLs) instead of being clipped by the compact heights above;
+   the dropdown blocks keep their compact sizing. */
+.hades-command-row > .block.hades-status-block {{
+    max-height: none !important;
+}}
+.hades-command-row > .block.hades-status-block .html-container {{
+    max-height: none !important;
+    overflow: visible !important;
+}}
 .hades-search-btn {{
     min-height: 74px !important;
     height: 74px !important;

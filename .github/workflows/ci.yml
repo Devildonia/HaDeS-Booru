@@ -101,9 +101,9 @@ jobs:
         # (a fresh `pip install -r requirements.txt` would fail otherwise). Practical
         # impact is limited: Pillow here only parses local user-provided image files,
         # and `MAX_IMAGE_PIXELS` (64 MP) caps decompression-bomb exposure.
-        # REVIEW DATE: 2026-10-22 (audit R7-C added the 11 missing IDs: 10 CVE-
-        # 2026-966xx/96778 + GHSA-78g4-xqwv-q3g8). Remove ALL of these ignores as
-        # soon as Gradio supports Pillow 13.
+        # REVIEW DATE: 2026-10-25 (audit R8-C added CVE-2026-112398 + CVE-2026-114501;
+        # Brotli 1.2.1 fixed PYSEC-2026-4322/GHSA-9v8h-qqgm-4m35 and is now locked).
+        # Remove ALL of these ignores as soon as Gradio supports Pillow 13.
         run: |
           python -m pip_audit -r requirements.lock \
             --ignore-vuln CVE-2026-96636 \
@@ -140,4 +140,6 @@ jobs:
             --ignore-vuln CVE-2026-112897 \
             --ignore-vuln CVE-2026-112899 \
             --ignore-vuln CVE-2026-112900 \
-            --ignore-vuln CVE-2026-112901
+            --ignore-vuln CVE-2026-112901 \
+            --ignore-vuln CVE-2026-112398 \
+            --ignore-vuln CVE-2026-114501

@@ -214,7 +214,12 @@ def test_importer_continues_with_partial_catalog_when_tag_list_page_fails(
 
 
 def test_importer_checkpoints_every_fifty_tags(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R7-H: enrichment progress is upserted in 50-tag chunks (crash-safe)."""
+    """R7-H: enrichment progress is upserted in 50-tag chunks (crash-safe).
+
+    Audit R8-B: a checkpoint stores ONLY the tags enriched so far — persisting
+    the unprocessed tail would make `resume` (which skips stored tags) drop it
+    forever. The final upsert still covers all tags.
+    """
     fake_service = _FakeDictionaryService()
     importer = TagDictionaryImporter(service=fake_service)
 
@@ -227,9 +232,10 @@ def test_importer_checkpoints_every_fifty_tags(monkeypatch: pytest.MonkeyPatch) 
 
     written = importer.import_from_danbooru(top=120, page_size=200, skip_wiki=True, throttle=0)
     assert written == 120
-    # Checkpoints at 50 and 100, plus the final upsert.
+    # Checkpoints at 50 and 100 (each scoped to the tags enriched so far),
+    # plus the final upsert covering everything.
     assert len(fake_service.upsert_calls) == 3
-    assert all(len(entries) == 120 for entries in fake_service.upsert_calls)
+    assert [len(entries) for entries in fake_service.upsert_calls] == [50, 100, 120]
 
 
 # ----------------------------- v1.1.1: source catalog metadata (Furbooru)
