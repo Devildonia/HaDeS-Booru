@@ -121,6 +121,21 @@ def _next_redirect_target(response: httpx.Response, current_url: str) -> str | N
     return str(httpx.URL(current_url).join(location))
 
 
+def _origin_of(url: str) -> str:
+    """Normalized origin (scheme://host[:port]) for credential scoping (audit R8-A).
+
+    Built from the individual URL attributes rather than `URL.origin` (which older
+    httpx releases lack), with default ports (80/443) normalized away.
+    """
+    u = httpx.URL(url)
+    if not u.scheme or not u.host:
+        return ""
+    default_port = {"http": 80, "https": 443}.get(u.scheme)
+    if u.port is None or u.port == default_port:
+        return f"{u.scheme}://{u.host}"
+    return f"{u.scheme}://{u.host}:{u.port}"
+
+
 def _retry_after_seconds(headers: Any) -> float:
     """Parses a numeric Retry-After header into seconds, capped at MAX_RETRY_AFTER_SECONDS (0.0 when absent/invalid)."""
     raw = headers.get("Retry-After", "") if headers is not None else ""
@@ -177,6 +192,12 @@ class HttpClient:
         assert_public_host(url)
         req_headers = self.build_headers(url, headers)
         last_err: Exception | None = None
+        # Audit R8-A: credentials must never leak to a different origin. httpx with
+        # follow_redirects=True strips Authorization on cross-origin redirects; since
+        # we follow redirects manually (R7-A SSRF guard), we must do the same here —
+        # otherwise a compromised board or an open redirect would receive the user's
+        # API key. `_origin_of` normalizes default ports (80/443) for the compare.
+        origin = _origin_of(url)
 
         # Reuse a single connection pool for the whole retry sequence.
         with httpx.Client(
@@ -187,15 +208,20 @@ class HttpClient:
             for attempt in range(retries + 1):
                 try:
                     current_url = url
+                    # Audit R8-E: this manual redirect loop is intentionally mirrored in
+                    # download_bytes() below; keep the two in sync when editing either.
                     for _hop in range(MAX_REDIRECT_HOPS + 1):
                         # Audit R7-A: validate every redirect hop against the SSRF
                         # guard BEFORE the next request leaves the process.
                         assert_public_host(current_url)
+                        # Audit R8-A: only the original origin gets the credentials;
+                        # any cross-origin redirect hop goes unauthenticated.
+                        hop_auth = auth if _origin_of(current_url) == origin else None
                         with client.stream(
                             "GET",
                             current_url,
                             params=params if current_url == url else None,
-                            auth=auth,
+                            auth=hop_auth,
                         ) as response:
                             if response.is_redirect:
                                 nxt = _next_redirect_target(response, current_url)
@@ -323,6 +349,7 @@ class HttpClient:
                 ) from err
             raise BooruNetworkError(
                 f"Server {urlparse(url).hostname} returned a payload that is not valid JSON.",
+                url=url,  # Audit R8-F: keep the offending URL in the error context.
             ) from err
 
     def download_bytes(self, url: str, retries: int = 2) -> tuple[bytes, str]:
@@ -344,6 +371,9 @@ class HttpClient:
             for attempt in range(retries + 1):
                 try:
                     current_url = url
+                    # Audit R8-E: this manual redirect loop is intentionally mirrored in
+                    # get_text() above; keep the two in sync when editing either.
+                    # (auth=None always: media downloads never carry credentials.)
                     for _hop in range(MAX_REDIRECT_HOPS + 1):
                         # Audit R7-A: validate every redirect hop against the SSRF
                         # guard BEFORE the next request leaves the process.

@@ -51,11 +51,17 @@ class StreamContextManager:
 
 
 class DummyClient:
-    """Drop-in `httpx.Client` stub that serves queued responses through `stream()`."""
+    """Drop-in `httpx.Client` stub that serves queued responses through `stream()`.
+
+    `calls` records every `stream()` invocation as `(method, url, kwargs)` so
+    tests can assert per-hop request attributes (e.g. the `auth` passed on a
+    redirect hop — audit R8-A).
+    """
 
     def __init__(self, responses: list[httpx.Response]) -> None:
         self.responses = responses
         self.call_count = 0
+        self.calls: list[tuple[str, str, dict[str, object]]] = []
 
     def __enter__(self) -> DummyClient:
         return self
@@ -64,6 +70,7 @@ class DummyClient:
         return None
 
     def stream(self, method: str, url: str, **kwargs) -> StreamContextManager:
+        self.calls.append((method, url, dict(kwargs)))
         resp = self.responses[self.call_count]
         self.call_count += 1
         return StreamContextManager(resp)
