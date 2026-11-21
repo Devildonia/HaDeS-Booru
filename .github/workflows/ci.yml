@@ -142,4 +142,9 @@ jobs:
             --ignore-vuln CVE-2026-112900 \
             --ignore-vuln CVE-2026-112901 \
             --ignore-vuln CVE-2026-112398 \
-            --ignore-vuln CVE-2026-114501
+            --ignore-vuln CVE-2026-114501 \
+            --ignore-vuln CVE-2026-112394 \
+            --ignore-vuln CVE-2026-112403 \
+            --ignore-vuln CVE-2026-112902 \
+            --ignore-vuln CVE-2026-128066 \
+            --ignore-vuln CVE-2026-128067

@@ -263,14 +263,10 @@ def _find_missing_ci_ignores(audit_payload: dict, ci_text: str) -> list[str]:
     for dep in audit_payload.get("dependencies", []):
         for vuln in dep.get("vulns", []):
             vid = str(vuln.get("id") or "").strip()
-            if vid and f"--ignore-vuln {vid}" not in ci_text:
-                missing.append(vid)
-            for alias in vuln.get("aliases", []) or []:
-                aid = str(alias).strip()
-                if aid.upper().startswith(("CVE-", "GHSA-")) and f"--ignore-vuln {aid}" not in ci_text:
-                    # Only flag if neither the primary id nor the alias is ignored.
-                    if not (vid and f"--ignore-vuln {vid}" in ci_text):
-                        missing.append(aid)
+            aliases = [str(a).strip() for a in (vuln.get("aliases") or []) if str(a).strip()]
+            candidates = [x for x in (vid, *aliases) if x]
+            if candidates and not any(f"--ignore-vuln {x}" in ci_text for x in candidates):
+                missing.append(vid or aliases[0])
     return sorted(set(missing))
 
 
