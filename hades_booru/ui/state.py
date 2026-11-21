@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 import gradio as gr
 
@@ -41,11 +41,12 @@ _SENSITIVE_QUERY_PARAMS = frozenset(
 
 @dataclass
 class SessionLists:
-    """In-memory per-session personal tag lists used when running with `--share` (X8 / R6-12)."""
+    """In-memory per-session personal tag lists and search history used when running remotely (X8 / R6-12 / HB-04)."""
 
     junk_tags_list: list[str] = field(default_factory=lambda: list(DEFAULT_JUNK_TAGS))
     user_blacklist: list[str] = field(default_factory=list)
     user_whitelist: list[str] = field(default_factory=list)
+    search_history: list[str] = field(default_factory=list)
 
 
 def make_session_lists() -> SessionLists:
@@ -118,15 +119,17 @@ def record_search_history(
     query: str,
     limit: int = MAX_SEARCH_HISTORY,
     persist: bool = True,
+    current_history: list[str] | None = None,
 ) -> list[str]:
-    """v1.0.6: prepend a search to the persisted history (dedup, most-recent-first).
+    """v1.0.6: prepend a search to the persisted (or session) history (dedup, most-recent-first).
 
     Empty/whitespace queries are ignored. Case-insensitive dedup keeps the newest
     position. The list is capped so the dropdown never grows unbounded.
     Audit Y5: pasted URLs are stored with any embedded user:pass credentials stripped.
     """
     q = _scrub_url_credentials((query or "").strip())
-    current = [str(x).strip() for x in (config_manager.config.search_history or []) if str(x).strip()]
+    source_history = current_history if current_history is not None else config_manager.config.search_history
+    current = [str(x).strip() for x in (source_history or []) if str(x).strip()]
     if not q:
         return current[:limit]
     deduped = [h for h in current if h.lower() != q.lower()]
@@ -163,22 +166,31 @@ def compute_top_tags(history: list[str] | None, limit: int = 8) -> list[str]:
 
 
 def _append_tag_to_url(url: str, tag: str, lowered: str) -> str:
-    """R7-02: appends `tag` to the `tags` query parameter of a booru search URL (dedup).
-
-    Falls back to adding a new `tags` parameter when the URL carries none, so a
-    pasted search URL is never corrupted by comma-joining a tag into the string.
-    """
+    """R7-02 + HB-11: appends `tag` to the active search parameter (`tags`, `q`, `query`) or tag path."""
     parts = urlsplit(url)
     pairs = parse_qsl(parts.query, keep_blank_values=True)
-    for i, (k, v) in enumerate(pairs):
-        if k.lower() == "tags":
-            existing = [x for x in v.replace(",", " ").split() if x]
-            if not any(x.lower() == lowered for x in existing):
-                existing.append(tag)
-            pairs[i] = ("tags", " ".join(existing))
-            break
-    else:
-        pairs.append(("tags", tag))
+    for param_name in ("tags", "q", "query"):
+        for i, (k, v) in enumerate(pairs):
+            if k.lower() == param_name:
+                existing = [x for x in v.replace(",", " ").split() if x]
+                if not any(x.lower() == lowered for x in existing):
+                    existing.append(tag)
+                pairs[i] = (k, " ".join(existing))
+                return urlunsplit(
+                    (parts.scheme, parts.netloc, parts.path, urlencode(pairs), parts.fragment)
+                )
+
+    path_m = re.search(r"(/(?:timelines/)?tag(?:s)?/)([^/?#]+)", parts.path, re.IGNORECASE)
+    if path_m:
+        current_seg = unquote(path_m.group(2))
+        existing = [x for x in current_seg.replace(",", " ").split() if x]
+        if not any(x.lower() == lowered for x in existing):
+            existing.append(tag)
+        new_seg = quote(" ".join(existing), safe="")
+        new_path = parts.path[: path_m.start(2)] + new_seg + parts.path[path_m.end(2) :]
+        return urlunsplit((parts.scheme, parts.netloc, new_path, parts.query, parts.fragment))
+
+    pairs.append(("tags", tag))
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(pairs), parts.fragment))
 
 

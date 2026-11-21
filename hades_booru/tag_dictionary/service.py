@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS tags (
     post_count INTEGER NOT NULL DEFAULT 0,
     body_en TEXT NOT NULL DEFAULT '',
     body_es TEXT DEFAULT NULL,
+    wiki_status TEXT NOT NULL DEFAULT 'pending',
+    aliases_status TEXT NOT NULL DEFAULT 'pending',
     updated_at TEXT NOT NULL
 );
 
@@ -126,6 +128,21 @@ class TagDictionaryService:
             try:
                 with conn:
                     conn.executescript(SCHEMA_SQL)
+                    cols = {
+                        str(r["name"])
+                        for r in conn.execute("PRAGMA table_info(tags)").fetchall()
+                    }
+                    if "wiki_status" not in cols:
+                        conn.execute(
+                            "ALTER TABLE tags ADD COLUMN wiki_status TEXT NOT NULL DEFAULT 'pending'"
+                        )
+                        conn.execute(
+                            "UPDATE tags SET wiki_status = 'ok' WHERE body_en != ''"
+                        )
+                    if "aliases_status" not in cols:
+                        conn.execute(
+                            "ALTER TABLE tags ADD COLUMN aliases_status TEXT NOT NULL DEFAULT 'pending'"
+                        )
                     if self._auto_seed:
                         row = conn.execute("SELECT COUNT(*) AS cnt FROM tags").fetchone()
                         count = int(row["cnt"]) if row else 0
@@ -150,23 +167,42 @@ class TagDictionaryService:
             cat: TagCategory = (
                 cast(TagCategory, raw_cat) if raw_cat in VALID_TAG_CATEGORIES else "general"
             )
+            body_en = str(entry.get("body_en") or "")
+            wiki_status = str(entry.get("wiki_status") or ("ok" if body_en else "pending"))
+            aliases_status = str(
+                entry.get("aliases_status") or ("ok" if entry.get("aliases") else "pending")
+            )
             conn.execute(
                 """
-                INSERT INTO tags (name, category, post_count, body_en, body_es, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO tags (name, category, post_count, body_en, body_es, wiki_status, aliases_status, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(name) DO UPDATE SET
                     category = excluded.category,
                     post_count = MAX(tags.post_count, excluded.post_count),
                     body_en = CASE WHEN excluded.body_en != '' THEN excluded.body_en ELSE tags.body_en END,
                     body_es = COALESCE(excluded.body_es, tags.body_es),
+                    wiki_status = CASE
+                        WHEN excluded.wiki_status = 'ok' THEN 'ok'
+                        WHEN tags.wiki_status = 'ok' THEN 'ok'
+                        WHEN excluded.wiki_status IN ('error', 'skipped') THEN excluded.wiki_status
+                        ELSE tags.wiki_status
+                    END,
+                    aliases_status = CASE
+                        WHEN excluded.aliases_status = 'ok' THEN 'ok'
+                        WHEN tags.aliases_status = 'ok' THEN 'ok'
+                        WHEN excluded.aliases_status = 'error' THEN 'error'
+                        ELSE tags.aliases_status
+                    END,
                     updated_at = excluded.updated_at
                 """,
                 (
                     name,
                     cat,
                     int(entry.get("post_count", 0)),
-                    str(entry.get("body_en") or ""),
+                    body_en,
                     entry.get("body_es"),
+                    wiki_status,
+                    aliases_status,
                     now,
                 ),
             )
@@ -192,6 +228,23 @@ class TagDictionaryService:
                 with conn:
                     self._insert_entries(conn, entries)
                 return len(entries)
+            finally:
+                if conn is not self._memory_conn:
+                    conn.close()
+
+    def enrichment_status_map(self) -> dict[str, tuple[str, str]]:
+        """Returns `{name: (wiki_status, aliases_status)}` for all stored tags (HB-07)."""
+        self.ensure_initialized()
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT name, wiki_status, aliases_status FROM tags"
+                ).fetchall()
+                return {
+                    str(r["name"]): (str(r["wiki_status"]), str(r["aliases_status"]))
+                    for r in rows
+                }
             finally:
                 if conn is not self._memory_conn:
                     conn.close()

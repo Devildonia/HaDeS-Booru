@@ -39,6 +39,7 @@ class ConfigManager:
         # save() distinguish "this process cleared it" (wipe, N5) from "this process
         # never had it; another instance persisted it" (keep the disk value).
         self._creds_touched: set[str] = set()
+        self._session_owned_creds: set[str] = set()
         self.last_error: str | None = None
         self.config: AppConfig = self._load()
         # Audit R6-07: snapshot of the state at load time; save() uses it to tell
@@ -52,26 +53,8 @@ class ConfigManager:
             for k, v in self._session_credentials.items()
         }
 
-    def _merge_with_disk(self, disk: dict | None, mine: dict) -> dict:
-        """Audit R6-07 + R7-B: 3-way field-level merge (base=snapshot at load, mine, disk).
-
-        Per field:
-        - untouched by this process (mine == snapshot): the disk value wins —
-          another instance may have updated it (a normal case since the port
-          auto-fallback made multi-instance runs common);
-        - changed by this process (mine != snapshot): mine wins — including
-          clearing a list to ``[]`` or removing individual items. The old
-          unconditional union logic resurrected cleared/removed entries (audit
-          R7-B cases 2b and 3); the old snapshot comparison also made scalars
-          unable to revert back to their loaded value (cases 1b/1c). The snapshot
-          is now refreshed after every successful save(), re-basing the merge;
-        - lists this process only APPENDED to (snapshot ⊆ mine) keep the union so
-          entries another instance added in the meantime survive (R6-07
-          cross-instance safety).
-        """
-        if not isinstance(disk, dict):
-            return mine
-        snapshot = self._loaded_snapshot or {}
+    def _merge_dicts(self, base: dict, mine: dict, disk: dict, *, path: tuple[str, ...] = ()) -> dict:
+        """Recursive 3-way field-level merge (base=snapshot at load/last-save, mine, disk)."""
         merged: dict = {}
         for key in set(disk) | set(mine):
             if key not in mine:
@@ -82,7 +65,11 @@ class ConfigManager:
                 continue
             my_val = mine[key]
             disk_val = disk[key]
-            base_val = snapshot.get(key, my_val)
+            base_val = base.get(key, my_val)
+            if isinstance(my_val, dict) and isinstance(disk_val, dict) and key != "credentials":
+                base_dict = base_val if isinstance(base_val, dict) else {}
+                merged[key] = self._merge_dicts(base_dict, my_val, disk_val, path=(*path, key))
+                continue
             if my_val == base_val:
                 merged[key] = disk_val
                 continue
@@ -105,6 +92,13 @@ class ConfigManager:
                     continue
             merged[key] = my_val
         return merged
+
+    def _merge_with_disk(self, disk: dict | None, mine: dict) -> dict:
+        """Audit R6-07 + R7-B + HB-05: 3-way field-level merge (base=snapshot, mine, disk)."""
+        if not isinstance(disk, dict):
+            return mine
+        snapshot = self._loaded_snapshot or {}
+        return self._merge_dicts(snapshot, mine, disk)
 
     def _load(self) -> AppConfig:
         with self._lock:
@@ -181,34 +175,27 @@ class ConfigManager:
                     # persist=False (R7-01/R7-03): only entries THIS process explicitly
                     # set or cleared (touched) are wiped; credentials merely loaded from
                     # disk by this process, or persisted by another instance, are kept.
-                    if self.config.persist_credentials:
-                        raw_disk_creds = payload.get("credentials")
-                    else:
-                        raw_disk_creds = (disk_payload or {}).get("credentials")
+                    raw_disk_creds = (disk_payload or {}).get("credentials")
                     disk_creds = raw_disk_creds if isinstance(raw_disk_creds, dict) else {}
                     merged_creds: dict[str, dict[str, str]] = {}
-                    for k in set(self._session_credentials) | set(disk_creds):
+                    for k in set(self._session_credentials) | set(disk_creds) | set(self._creds_touched) | set(self._session_owned_creds):
                         sc = self._session_credentials.get(k)
                         disk_entry = self._normalize_creds_entry(disk_creds.get(k))
-                        snap = self._loaded_creds_snapshot.get(k)
-                        snap_had_value = bool(snap and (snap.user_id or snap.api_key))
                         if not self.config.persist_credentials:
-                            # Session-only mode: wipe what this process touched, keep the rest.
+                            # Session-only mode: wipe what this process set/touched, keep the rest.
                             merged_creds[k] = (
                                 {"user_id": "", "api_key": ""}
-                                if k in self._creds_touched
+                                if k in (self._creds_touched | self._session_owned_creds)
                                 else dict(disk_entry)
                             )
-                        elif sc is not None and (sc.user_id or sc.api_key):
-                            merged_creds[k] = {"user_id": sc.user_id, "api_key": sc.api_key}
-                        elif sc is None:
-                            merged_creds[k] = dict(disk_entry)
-                        elif k in self._creds_touched or snap_had_value:
-                            # Explicitly cleared by this process (N5 contract).
-                            merged_creds[k] = {"user_id": "", "api_key": ""}
+                        elif k in self._creds_touched:
+                            # This process explicitly set or cleared this source since last save.
+                            if sc is not None and (sc.user_id or sc.api_key):
+                                merged_creds[k] = {"user_id": sc.user_id, "api_key": sc.api_key}
+                            else:
+                                merged_creds[k] = {"user_id": "", "api_key": ""}
                         else:
-                            # Loaded empty and never touched: another instance persisted it
-                            # -> keep the disk value (R7-01).
+                            # Untouched by this process: respect disk (including deletions & rotations).
                             merged_creds[k] = dict(disk_entry)
                     payload["credentials"] = merged_creds
 
@@ -229,6 +216,19 @@ class ConfigManager:
                     # the stale disk value would resurrect (cases 1b/1c/2b).
                     # deepcopy: the snapshot must not alias live config lists.
                     self._loaded_snapshot = copy.deepcopy(payload)
+                    # HB-05: align live in-memory config with the merged disk payload so a
+                    # second save() without edits does not revert another instance's changes.
+                    self._apply_payload_to_config(payload)
+                    if self.config.persist_credentials:
+                        self._session_credentials = {
+                            k: SourceCredential(user_id=v.user_id, api_key=v.api_key)
+                            for k, v in self.config.credentials.items()
+                        }
+                        self._loaded_creds_snapshot = {
+                            k: SourceCredential(user_id=v.user_id, api_key=v.api_key)
+                            for k, v in self.config.credentials.items()
+                        }
+                        self._creds_touched.clear()
                 self.last_error = None
                 return True
             except OSError as err:
@@ -249,6 +249,26 @@ class ConfigManager:
                 "api_key": str(raw.get("api_key") or ""),
             }
         return {"user_id": "", "api_key": ""}
+
+    def _apply_payload_to_config(self, payload: dict) -> None:
+        """Aligns `self.config` fields with `payload` without failing on relaxed test values."""
+        for key, val in payload.items():
+            if key == "credentials":
+                if self.config.persist_credentials and isinstance(val, dict):
+                    self.config.credentials = {
+                        str(k): SourceCredential(**self._normalize_creds_entry(v))
+                        for k, v in val.items()
+                    }
+                continue
+            if not hasattr(self.config, key):
+                continue
+            current = getattr(self.config, key)
+            if isinstance(val, dict) and hasattr(type(current), "model_fields"):
+                for sub_k, sub_v in val.items():
+                    if hasattr(current, sub_k):
+                        setattr(current, sub_k, copy.deepcopy(sub_v))
+            else:
+                setattr(self.config, key, copy.deepcopy(val))
 
     def get_credentials(self, source_id: str) -> SourceCredential:
         """Retrieves active credentials for a given source ID (from session memory)."""
@@ -295,6 +315,7 @@ class ConfigManager:
                 )
                 self._session_credentials[source_id] = cred
                 self._creds_touched.add(source_id)
+                self._session_owned_creds.add(source_id)
                 if self.config.persist_credentials:
                     self.config.credentials[source_id] = cred
                 else:
@@ -310,12 +331,15 @@ class ConfigManager:
         safe direction for multi-instance setups (audit R7-01/R7-03).
         """
         with self._lock:
-            self._creds_touched.update(self.config.credentials.keys())
+            self._creds_touched.update(
+                set(self.config.credentials.keys()) | set(self._session_credentials.keys())
+            )
+            self._session_owned_creds.update(self._creds_touched)
             self._session_credentials = {
-                k: SourceCredential() for k in self.config.credentials
+                k: SourceCredential() for k in self._creds_touched
             }
             self.config.credentials = {
-                k: SourceCredential() for k in self.config.credentials
+                k: SourceCredential() for k in self._creds_touched
             }
             return self.save()
 

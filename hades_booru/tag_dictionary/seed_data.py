@@ -8,7 +8,7 @@ a verified Spanish translation set body_es=None (never machine-translated).
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from hades_booru.models import TagCategory
 
@@ -20,6 +20,8 @@ class SeedTagEntry(TypedDict):
     body_en: str
     body_es: str | None
     aliases: list[str]
+    wiki_status: NotRequired[str]
+    aliases_status: NotRequired[str]
 
 
 SEED_TAG_CATALOG: list[SeedTagEntry] = [

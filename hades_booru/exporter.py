@@ -10,15 +10,27 @@ Supports:
 from __future__ import annotations
 
 import datetime as dt
+import io
+import os
 import re
 import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from urllib.parse import urlparse
 
+from PIL import Image, UnidentifiedImageError
+
 from hades_booru.http_client import http_client
 from hades_booru.models import ExportMode, Post, TagCategory
 from hades_booru.normalizer import PromptNormalizer
+
+SUPPORTED_EXPORT_IMAGE_EXTS: frozenset[str] = frozenset(
+    {".png", ".jpg", ".gif", ".webp", ".avif"}
+)
+SUPPORTED_EXPORT_VIDEO_EXTS: frozenset[str] = frozenset({".mp4", ".webm"})
+SUPPORTED_EXPORT_MEDIA_EXTS: frozenset[str] = (
+    SUPPORTED_EXPORT_IMAGE_EXTS | SUPPORTED_EXPORT_VIDEO_EXTS
+)
 
 KNOWN_EXTENSIONS: tuple[str, ...] = (
     ".png",
@@ -126,6 +138,46 @@ def guess_media_extension(url: str, content_type: str = "", data: bytes = b"") -
 _guess_image_extension = guess_media_extension
 
 
+def validate_media_payload(data: bytes, url: str = "", content_type: str = "") -> str:
+    """Validates downloaded media bytes against magic signatures and supported formats (HB-03).
+
+    Rejects HTML error pages, empty/truncated payloads, and unknown formats even when
+    the URL ends with an image extension. Returns the canonical extension on success.
+    """
+    if not data:
+        raise ValueError("Empty media payload")
+    magic = _magic_ext(data)
+    if magic is None or magic not in SUPPORTED_EXPORT_MEDIA_EXTS:
+        ct_note = f" (Content-Type: {content_type})" if content_type else ""
+        raise ValueError(f"Unsupported or invalid media signature{ct_note}")
+
+    if magic in (".png", ".jpg", ".gif", ".webp"):
+        try:
+            with Image.open(io.BytesIO(data)) as img:
+                img.verify()
+        except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as err:
+            raise ValueError(f"Corrupt or truncated {magic} image: {err}") from err
+    elif len(data) < 16:
+        raise ValueError(f"Truncated {magic} media payload ({len(data)} bytes)")
+
+    return magic
+
+
+def _reserve_unique_path(output_dir: Path, filename: str) -> Path:
+    """Atomically reserves a unique destination path in `output_dir` using O_CREAT | O_EXCL (HB-06)."""
+    stem, suffix = Path(filename).stem, Path(filename).suffix
+    counter = 1
+    while True:
+        candidate_name = filename if counter == 1 else f"{stem}_{counter}{suffix}"
+        candidate = output_dir / candidate_name
+        try:
+            fd = os.open(str(candidate), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+            os.close(fd)
+            return candidate
+        except FileExistsError:
+            counter += 1
+
+
 class BulkExporter:
     """Handles text formatting, ZIP packaging, and direct local dataset generation."""
 
@@ -192,6 +244,89 @@ class BulkExporter:
 
         return f"{header}" + "\n".join(lines)
 
+    def create_export_file_with_report(
+        self,
+        posts: Sequence[Post],
+        mode: ExportMode,
+        normalizer: PromptNormalizer,
+        output_dir: Path,
+        source_name: str = "Booru",
+        query_tags: str = "tags",
+        custom_prefix: str = "",
+        include_header: bool = False,
+        trigger_word: str = "",
+        exclude_categories: Sequence[TagCategory] | None = None,
+        include_images_in_zip: bool = False,
+        progress_cb: Callable[[float, str], None] | None = None,
+    ) -> tuple[Path, list[str]]:
+        """Writes a downloadable .txt or .zip file atomically and returns `(Path, errors)` (HB-06)."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        filename = self.generate_filename(source_name, query_tags, mode, custom_prefix)
+        target_path = _reserve_unique_path(output_dir, filename)
+        tmp_path = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
+
+        try:
+            if mode == "trainer-zip":
+                zip_errors: list[str] = []
+                with zipfile.ZipFile(tmp_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    total = max(1, len(posts))
+                    for idx, post in enumerate(posts):
+                        if progress_cb:
+                            progress_cb(
+                                idx / total,
+                                f"Packaging post #{post.id} ({idx + 1}/{total})...",
+                            )
+                        base_name = re.sub(r"[^a-zA-Z0-9_-]", "_", f"{post.source_id}_{post.id}")
+                        prompt = normalizer.format_post_prompt(
+                            post,
+                            exclude_categories=exclude_categories,
+                            trigger_word=trigger_word,
+                        ).strip()
+                        zf.writestr(f"{base_name}.txt", prompt.encode("utf-8"))
+
+                        if include_images_in_zip:
+                            if not post.best_download_url:
+                                zip_errors.append(f"{base_name}: missing media URL")
+                                continue
+                            try:
+                                img_bytes, ct = http_client.download_bytes(post.best_download_url)
+                                ext = validate_media_payload(img_bytes, post.best_download_url, ct)
+                                zf.writestr(f"{base_name}{ext}", img_bytes)
+                            except Exception as err:
+                                zip_errors.append(f"{base_name}: {err}")
+
+                    # Never swallow packaging failures silently: ship an errors.txt manifest.
+                    if zip_errors:
+                        zf.writestr("errors.txt", "\n".join(zip_errors).encode("utf-8"))
+
+                os.replace(tmp_path, target_path)
+                self.last_zip_errors = list(zip_errors)
+                if progress_cb:
+                    progress_cb(1.0, f"Created ZIP archive: {target_path.name}")
+                return target_path, zip_errors
+
+            content = self.generate_export_content(
+                posts=posts,
+                mode=mode,
+                normalizer=normalizer,
+                include_header=include_header,
+                source_name=source_name,
+                trigger_word=trigger_word,
+                exclude_categories=exclude_categories,
+            )
+            tmp_path.write_text(content, encoding="utf-8")
+            os.replace(tmp_path, target_path)
+            self.last_zip_errors = []
+            return target_path, []
+        except Exception:
+            for orphan in (tmp_path, target_path):
+                try:
+                    if orphan.exists():
+                        orphan.unlink()
+                except OSError:
+                    pass
+            raise
+
     def create_export_file(
         self,
         posts: Sequence[Post],
@@ -208,68 +343,21 @@ class BulkExporter:
         progress_cb: Callable[[float, str], None] | None = None,
     ) -> Path:
         """Writes a downloadable .txt or .zip file to output_dir and returns its Path."""
-        # Audit R6-11: reset stale per-instance state first so two overlapping exports
-        # never mix each other's error reports in the UI.
-        self.last_zip_errors = []
-        output_dir.mkdir(parents=True, exist_ok=True)
-        filename = self.generate_filename(source_name, query_tags, mode, custom_prefix)
-        target_path = output_dir / filename
-        if target_path.exists():
-            # Audit R6-22: never silently overwrite a previous export.
-            stem, suffix = Path(filename).stem, Path(filename).suffix
-            counter = 2
-            while (output_dir / f"{stem}_{counter}{suffix}").exists():
-                counter += 1
-            target_path = output_dir / f"{stem}_{counter}{suffix}"
-
-        if mode == "trainer-zip":
-            zip_errors: list[str] = []
-            with zipfile.ZipFile(target_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-                total = max(1, len(posts))
-                for idx, post in enumerate(posts):
-                    if progress_cb:
-                        progress_cb(
-                            idx / total,
-                            f"Packaging post #{post.id} ({idx + 1}/{total})...",
-                        )
-                    base_name = re.sub(r"[^a-zA-Z0-9_-]", "_", f"{post.source_id}_{post.id}")
-                    prompt = normalizer.format_post_prompt(
-                        post,
-                        exclude_categories=exclude_categories,
-                        trigger_word=trigger_word,
-                    ).strip()
-                    zf.writestr(f"{base_name}.txt", prompt.encode("utf-8"))
-
-                    if include_images_in_zip and post.best_download_url:
-                        try:
-                            img_bytes, ct = http_client.download_bytes(post.best_download_url)
-                            ext = guess_media_extension(post.best_download_url, ct, img_bytes)
-                            zf.writestr(f"{base_name}{ext}", img_bytes)
-                        except Exception as err:
-                            zip_errors.append(f"{base_name}: {err}")
-
-                # Never swallow packaging failures silently: ship an errors.txt manifest.
-                if zip_errors:
-                    zf.writestr("errors.txt", "\n".join(zip_errors).encode("utf-8"))
-
-            self.last_zip_errors = zip_errors
-            if progress_cb:
-                progress_cb(1.0, f"Created ZIP archive: {target_path.name}")
-            return target_path
-
-        self.last_zip_errors = []
-
-        content = self.generate_export_content(
+        path, _ = self.create_export_file_with_report(
             posts=posts,
             mode=mode,
             normalizer=normalizer,
-            include_header=include_header,
+            output_dir=output_dir,
             source_name=source_name,
+            query_tags=query_tags,
+            custom_prefix=custom_prefix,
+            include_header=include_header,
             trigger_word=trigger_word,
             exclude_categories=exclude_categories,
+            include_images_in_zip=include_images_in_zip,
+            progress_cb=progress_cb,
         )
-        target_path.write_text(content, encoding="utf-8")
-        return target_path
+        return path
 
     def export_dataset_to_local_folder(
         self,
@@ -281,7 +369,7 @@ class BulkExporter:
         download_images: bool = True,
         high_res: bool = True,
         progress_cb: Callable[[float, str], None] | None = None,
-    ) -> dict[str, int | str]:
+    ) -> dict[str, int | str | list[str]]:
         """Saves individual <source>_<id>.txt captions and (optionally) downloads their paired
         images directly into target_folder on disk — ready for Kohya_ss / OneTrainer.
         """
@@ -291,6 +379,7 @@ class BulkExporter:
         saved_txt = 0
         saved_img = 0
         failed_img = 0
+        errors: list[str] = []
         total = max(1, len(posts))
 
         for idx, post in enumerate(posts):
@@ -307,20 +396,27 @@ class BulkExporter:
                 trigger_word=trigger_word,
             ).strip()
             txt_path = folder / f"{base_name}.txt"
-            txt_path.write_text(prompt, encoding="utf-8")
-            saved_txt += 1
 
             if download_images:
                 img_url = post.best_download_url if high_res else post.best_display_url
-                if img_url:
-                    try:
-                        img_bytes, ct = http_client.download_bytes(img_url)
-                        ext = guess_media_extension(img_url, ct, img_bytes)
-                        img_path = folder / f"{base_name}{ext}"
-                        img_path.write_bytes(img_bytes)
-                        saved_img += 1
-                    except Exception:
-                        failed_img += 1
+                if not img_url:
+                    failed_img += 1
+                    errors.append(f"{base_name}: missing media URL")
+                    continue
+                try:
+                    img_bytes, ct = http_client.download_bytes(img_url)
+                    ext = validate_media_payload(img_bytes, img_url, ct)
+                    img_path = folder / f"{base_name}{ext}"
+                    img_path.write_bytes(img_bytes)
+                    txt_path.write_text(prompt, encoding="utf-8")
+                    saved_img += 1
+                    saved_txt += 1
+                except Exception as err:
+                    failed_img += 1
+                    errors.append(f"{base_name}: {err}")
+            else:
+                txt_path.write_text(prompt, encoding="utf-8")
+                saved_txt += 1
 
         if progress_cb:
             progress_cb(1.0, f"Dataset saved to {folder}")
@@ -330,6 +426,7 @@ class BulkExporter:
             "saved_txt": saved_txt,
             "saved_img": saved_img,
             "failed_img": failed_img,
+            "errors": errors,
         }
 
 

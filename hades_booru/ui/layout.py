@@ -143,9 +143,13 @@ def _make_blocks() -> gr.Blocks:
     gradio>=6.0,<7 and not every 6.x build has it; app.py additionally sets
     GRADIO_ANALYTICS_ENABLED=false for versions that lack the parameter.
     """
-    if "analytics_enabled" in inspect.signature(gr.Blocks.__init__).parameters:
-        return gr.Blocks(title=f"HaDeS Booru v{__version__}", analytics_enabled=False)
-    return gr.Blocks(title=f"HaDeS Booru v{__version__}")
+    blocks_kwargs: dict[str, Any] = {"title": f"HaDeS Booru v{__version__}"}
+    blocks_params = inspect.signature(gr.Blocks.__init__).parameters
+    if "analytics_enabled" in blocks_params:
+        blocks_kwargs["analytics_enabled"] = False
+    if "delete_cache" in blocks_params:
+        blocks_kwargs["delete_cache"] = (3600, 3600)
+    return gr.Blocks(**blocks_kwargs)
 
 
 def _dispatch_adapter_search(
@@ -324,10 +328,11 @@ def create_gradio_app(share_mode: bool = False) -> gr.Blocks:
                     elem_classes=["hades-search-btn"],
                 )
 
+            initial_history = [] if share_mode else list(config_manager.config.search_history or [])
             with gr.Row(equal_height=True):
                 with gr.Row(scale=1, variant="panel", elem_classes=["hades-command-row"]):
                     recent_dropdown = gr.Dropdown(
-                        choices=list(config_manager.config.search_history or []),
+                        choices=initial_history,
                         value=None,
                         label=t(lang, "recent_label"),
                         allow_custom_value=False,
@@ -336,7 +341,7 @@ def create_gradio_app(share_mode: bool = False) -> gr.Blocks:
                     clear_history_btn = gr.Button(t(lang, "clear_history_btn"), scale=1, size="sm")
                 with gr.Row(scale=1, variant="panel", elem_classes=["hades-command-row"]):
                     top_tags_dropdown = gr.Dropdown(
-                        choices=compute_top_tags(config_manager.config.search_history),
+                        choices=compute_top_tags(initial_history),
                         value=None,
                         label=t(lang, "top_tags_label"),
                         allow_custom_value=False,
@@ -854,6 +859,7 @@ def create_gradio_app(share_mode: bool = False) -> gr.Blocks:
         )
         clear_history_btn.click(
             fn=clear_search_history_handler,
+            inputs=[*session_input_tail],
             outputs=[recent_dropdown, top_tags_dropdown],
         )
         top_tags_add_btn.click(
@@ -1240,11 +1246,12 @@ def create_gradio_app(share_mode: bool = False) -> gr.Blocks:
             ],
             outputs=[download_file_output, local_export_status],
         )
-        browse_folder_btn.click(
-            fn=open_native_folder_dialog,
-            inputs=[local_folder_input, lang_dropdown],
-            outputs=[local_folder_input],
-        )
+        if not share_mode:
+            browse_folder_btn.click(
+                fn=open_native_folder_dialog,
+                inputs=[local_folder_input, lang_dropdown],
+                outputs=[local_folder_input],
+            )
         save_local_folder_btn.click(
             fn=save_dataset_to_folder_handler,
             inputs=[
@@ -1260,11 +1267,12 @@ def create_gradio_app(share_mode: bool = False) -> gr.Blocks:
             ],
             outputs=[local_export_status],
         )
-        open_explorer_btn.click(
-            fn=open_folder_in_explorer,
-            inputs=[local_folder_input, lang_dropdown],
-            outputs=[local_export_status],
-        )
+        if not share_mode:
+            open_explorer_btn.click(
+                fn=open_folder_in_explorer,
+                inputs=[local_folder_input, lang_dropdown],
+                outputs=[local_export_status],
+            )
 
         cred_textbox_list = [
             danbooru_user,

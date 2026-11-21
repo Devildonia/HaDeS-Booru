@@ -133,27 +133,81 @@ def _extract_comfyui_prompt(blob: str) -> tuple[str, str] | None:
     if not texts:
         return None
 
-    def _link_target(value: object) -> str | None:
+    def _extract_node_id(value: object) -> str | None:
         if isinstance(value, (list, tuple)) and value:
             value = value[0]
-        if isinstance(value, (str, int)) and str(value).strip() in texts:
-            return str(value).strip()
+        if isinstance(value, (str, int)):
+            nid = str(value).strip()
+            if nid in graph or nid in texts:
+                return nid
         return None
 
-    pos_id: str | None = None
-    neg_id: str | None = None
+    def _resolve_conditioning_text(start_val: object, max_depth: int = 16) -> str | None:
+        """Bounded BFS over intermediate ComfyUI conditioning nodes with cycle protection (HB-12)."""
+        start_id = _extract_node_id(start_val)
+        if start_id is None:
+            return None
+        queue: list[tuple[str, int]] = [(start_id, 0)]
+        visited: set[str] = set()
+        preferred_ports = (
+            "conditioning",
+            "conditioning_1",
+            "conditioning_2",
+            "conditioning_a",
+            "conditioning_b",
+            "positive",
+            "negative",
+            "text",
+            "text_g",
+            "text_l",
+            "prompt",
+        )
+        while queue:
+            nid, depth = queue.pop(0)
+            if nid in visited:
+                continue
+            visited.add(nid)
+            if nid in texts:
+                return texts[nid]
+            if depth >= max_depth:
+                continue
+            node = graph.get(nid)
+            if not isinstance(node, dict):
+                continue
+            inputs = node.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            seen_keys: set[str] = set()
+            for port in preferred_ports:
+                if port in inputs:
+                    seen_keys.add(port)
+                    nxt = _extract_node_id(inputs[port])
+                    if nxt and nxt not in visited:
+                        queue.append((nxt, depth + 1))
+            for key, val in inputs.items():
+                if key in seen_keys:
+                    continue
+                nxt = _extract_node_id(val)
+                if nxt and nxt not in visited:
+                    queue.append((nxt, depth + 1))
+        return None
+
+    pos_text: str | None = None
+    neg_text: str | None = None
     for node in graph.values():
         if not isinstance(node, dict):
             continue
         inputs = node.get("inputs")
         if not isinstance(inputs, dict):
             continue
-        pos_id = pos_id or _link_target(inputs.get("positive"))
-        neg_id = neg_id or _link_target(inputs.get("negative"))
+        if pos_text is None and "positive" in inputs:
+            pos_text = _resolve_conditioning_text(inputs.get("positive"))
+        if neg_text is None and "negative" in inputs:
+            neg_text = _resolve_conditioning_text(inputs.get("negative"))
 
-    if pos_id is not None or neg_id is not None:
-        positive = texts.get(pos_id, "") if pos_id is not None else ""
-        negative = texts.get(neg_id, "") if neg_id is not None else ""
+    if pos_text is not None or neg_text is not None:
+        positive = pos_text or ""
+        negative = neg_text or ""
         # Audit Y3: text nodes NOT linked by the sampler are dead nodes (orphaned
         # style presets, discarded drafts). Mixing them into the negative prompt would
         # inject positive-side words ("1girl, smile") into what users train against,
@@ -362,7 +416,7 @@ def extract_image_metadata(file_path: str) -> ExtractedImageMeta:
             meta.negative = negative or None
             meta.settings = settings or None
             added = _merge_tags(meta.tags, positive)
-            if added or negative:
+            if added or negative or settings:
                 meta.sources.append("PNG tEXt 'parameters'/'prompt'")
                 found_anything = True
 
@@ -401,9 +455,9 @@ def extract_image_metadata(file_path: str) -> ExtractedImageMeta:
         if settings:
             meta.settings = settings
         added = _merge_tags(meta.tags, meta.prompt or "")
-        if added or negative:
+        if added or negative or settings:
             meta.sources.append("EXIF UserComment")
             found_anything = True
 
-    meta.found = found_anything or bool(meta.tags or meta.prompt)
+    meta.found = found_anything or bool(meta.tags or meta.prompt or meta.settings)
     return meta

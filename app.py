@@ -13,6 +13,7 @@ Port behaviour (v1.0.6):
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import os
 import socket
 from pathlib import Path
@@ -32,6 +33,17 @@ from hades_booru.ui.theme import CUSTOM_CSS, create_hades_theme
 
 DEFAULT_PORT = 7863
 MAX_PORT_TRIES = 50
+
+
+def is_loopback_host(host: str) -> bool:
+    """Return True when `host` binds strictly to a loopback interface."""
+    normalized = (host or "").strip().strip("[]").lower()
+    if normalized in ("localhost", "127.0.0.1", "::1"):
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
 
 
 def find_free_port(host: str, start: int, max_tries: int = MAX_PORT_TRIES) -> int:
@@ -90,7 +102,8 @@ def main() -> None:
     if chosen_port != args.port:
         print(f"[HaDeS] Port {args.port} is busy — automatically using {chosen_port} instead.")
 
-    app = create_gradio_app(share_mode=args.share)
+    remote_mode = bool(args.share or not is_loopback_host(args.host))
+    app = create_gradio_app(share_mode=remote_mode)
     try:
         # Gradio 6 moved the page-level `js` hook from Blocks() to launch().
         # This restores the drop-to-replace surface on the Image-to-Prompt

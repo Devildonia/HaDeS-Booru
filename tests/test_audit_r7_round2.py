@@ -258,25 +258,56 @@ def test_furbooru_registered_with_capability_flags() -> None:
 
 # ---------------------------------------------- R7-C: CI ignore list parity
 
-def test_ci_pillow_vuln_ignore_list_is_complete() -> None:
-    """R7-C: every Pillow vuln pip-audit reports is in the CI ignore list (documented review)."""
+def _find_missing_ci_ignores(audit_payload: dict, ci_text: str) -> list[str]:
+    missing: list[str] = []
+    for dep in audit_payload.get("dependencies", []):
+        for vuln in dep.get("vulns", []):
+            vid = str(vuln.get("id") or "").strip()
+            if vid and f"--ignore-vuln {vid}" not in ci_text:
+                missing.append(vid)
+            for alias in vuln.get("aliases", []) or []:
+                aid = str(alias).strip()
+                if aid.upper().startswith(("CVE-", "GHSA-")) and f"--ignore-vuln {aid}" not in ci_text:
+                    # Only flag if neither the primary id nor the alias is ignored.
+                    if not (vid and f"--ignore-vuln {vid}" in ci_text):
+                        missing.append(aid)
+    return sorted(set(missing))
+
+
+def test_ci_pillow_vuln_ignore_list_policy_offline() -> None:
+    """HB-13: offline fixture verifies that unignored vulns in structured pip-audit JSON fail."""
     ci_path = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci.yml"
     ci = ci_path.read_text(encoding="utf-8")
-    # The 35 known Pillow 12.x CVEs/GHSAs must all be present as --ignore-vuln entries.
+    sample = {
+        "dependencies": [
+            {"name": "pillow", "version": "12.3.0", "vulns": [{"id": "CVE-2099-99999", "aliases": []}]}
+        ]
+    }
+    assert _find_missing_ci_ignores(sample, ci) == ["CVE-2099-99999"]
+
+
+def test_ci_pillow_vuln_ignore_list_is_complete() -> None:
+    """R7-C + HB-13: every Pillow vuln pip-audit reports is in the CI ignore list."""
+    import json
     import subprocess
     import sys
 
+    ci_path = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci.yml"
+    ci = ci_path.read_text(encoding="utf-8")
+
     result = subprocess.run(
-        [sys.executable, "-m", "pip_audit", "-r", "requirements.lock"],
+        [sys.executable, "-m", "pip_audit", "-r", "requirements.lock", "--format", "json"],
         capture_output=True,
         text=True,
         cwd=str(ci_path.parent.parent),
     )
-    if result.returncode == 0:
-        return  # nothing to ignore
-    missing: list[str] = []
-    for line in (result.stdout + result.stderr).splitlines():
-        for token in line.replace(",", " ").split():
-            if token.upper().startswith(("CVE-", "GHSA-")) and f"--ignore-vuln {token}" not in ci:
-                missing.append(token)
-    assert not missing, f"Vulns missing from CI ignore list: {sorted(set(missing))}"
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as err:
+        pytest.skip(f"pip-audit unavailable or network/DNS error: {err} ({result.stderr.strip()})")
+
+    if not isinstance(payload, dict) or "dependencies" not in payload:
+        pytest.skip(f"Unexpected pip-audit JSON structure: {result.stderr.strip()}")
+
+    missing = _find_missing_ci_ignores(payload, ci)
+    assert not missing, f"Vulns missing from CI ignore list: {missing}"

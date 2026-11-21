@@ -23,8 +23,10 @@ def build_gallery_items(posts: list[Post], quality: ImageQuality) -> list[tuple[
     return image_cache.build_gallery_items(posts, quality)
 
 
-def open_native_folder_dialog(current_dir: str, lang: str = "en") -> str:
+def open_native_folder_dialog(current_dir: str, lang: str = "en", share_mode: bool = False) -> str:
     """Opens the native OS folder selection dialog via an isolated Python subprocess."""
+    if share_mode:
+        return current_dir
     dialog_title = t(lang, "folder_dialog_title")
     script = (
         "import tkinter as tk; from tkinter import filedialog; "
@@ -50,8 +52,10 @@ def open_native_folder_dialog(current_dir: str, lang: str = "en") -> str:
     return current_dir
 
 
-def open_folder_in_explorer(folder_path: str, lang: str = "en") -> str:
+def open_folder_in_explorer(folder_path: str, lang: str = "en", share_mode: bool = False) -> str:
     """Opens the target folder in the OS file manager."""
+    if share_mode:
+        return t(lang, "share_mode_blocked_action")
     target = Path(folder_path).expanduser().resolve()
     target.mkdir(parents=True, exist_ok=True)
     try:

@@ -231,7 +231,17 @@ def create_ui_handlers(
                 session_lists=session_lists,
             )
 
-            new_history = record_search_history(trimmed_q, persist=not store.share_mode)
+            if store.share_mode:
+                cur_hist = session_lists.search_history if session_lists is not None else []
+                new_history = record_search_history(
+                    trimmed_q,
+                    persist=False,
+                    current_history=cur_hist,
+                )
+                if session_lists is not None:
+                    session_lists.search_history = new_history
+            else:
+                new_history = record_search_history(trimmed_q, persist=True)
             return (
                 results,
                 0,
@@ -268,6 +278,11 @@ def create_ui_handlers(
                 persist=False,
                 session_lists=session_lists,
             )
+            hist_for_ui = (
+                list(session_lists.search_history)
+                if store.share_mode and session_lists is not None
+                else ([] if store.share_mode else list(config_manager.config.search_history or []))
+            )
             return (
                 [],
                 0,
@@ -281,17 +296,20 @@ def create_ui_handlers(
                 stats_html,
                 render_status_pill_html(err_msg, lang=cur_lang, state="error"),
                 gr.update(
-                    choices=list(config_manager.config.search_history or []),
+                    choices=hist_for_ui,
                     value=None,
                 ),
                 gr.update(
-                    choices=compute_top_tags(config_manager.config.search_history),
+                    choices=compute_top_tags(hist_for_ui),
                     value=None,
                 ),
             )
 
-    def clear_search_history_handler() -> list[Any]:
-        if not store.share_mode:
+    def clear_search_history_handler(session_lists: SessionLists | None = None) -> list[Any]:
+        if store.share_mode:
+            if session_lists is not None:
+                session_lists.search_history = []
+        else:
             config_manager.config.search_history = []
             config_manager.save()
         return [
@@ -631,7 +649,7 @@ def create_ui_handlers(
         except ValueError:
             out_dir = cwd / "exports"
             used_cwd_fallback = True
-        file_path = bulk_exporter.create_export_file(
+        file_path, zip_errors = bulk_exporter.create_export_file_with_report(
             posts=posts,
             mode=exp_mode,
             normalizer=norm,
@@ -648,8 +666,8 @@ def create_ui_handlers(
         status = t(cur_lang, "export_file_saved", path=str(file_path))
         if used_cwd_fallback:
             status += t(cur_lang, "export_file_cwd_fallback_suffix", requested=str(requested))
-        if bulk_exporter.last_zip_errors:
-            status += t(cur_lang, "export_zip_errors_suffix", count=len(bulk_exporter.last_zip_errors))
+        if zip_errors:
+            status += t(cur_lang, "export_zip_errors_suffix", count=len(zip_errors))
         return str(file_path), status
 
     def save_dataset_to_folder_handler(

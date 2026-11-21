@@ -193,14 +193,25 @@ class TagDictionaryImporter:
                 name = normalize_dict_query(str(item.get("name") or ""))
                 if not name or name in tag_records:
                     continue
-                cat_id = int(item.get("category") or 0)
+                try:
+                    raw_cat = item.get("category")
+                    cat_id = int(raw_cat) if raw_cat is not None and raw_cat != "" else 0
+                except (ValueError, TypeError):
+                    cat_id = 0
+                try:
+                    raw_count = item.get("post_count")
+                    post_count = max(0, int(raw_count)) if raw_count is not None and raw_count != "" else 0
+                except (ValueError, TypeError):
+                    post_count = 0
                 tag_records[name] = {
                     "name": name,
                     "category": DANBOORU_CATEGORY_MAP.get(cat_id, "general"),
-                    "post_count": int(item.get("post_count") or 0),
+                    "post_count": post_count,
                     "body_en": "",
                     "body_es": None,
                     "aliases": [],
+                    "wiki_status": "skipped" if skip_wiki else "pending",
+                    "aliases_status": "pending",
                 }
                 new_in_page += 1
                 if len(tag_records) >= target:
@@ -215,40 +226,55 @@ class TagDictionaryImporter:
             logger.info("Danbooru importer: no tags collected; nothing to write.")
             return 0
 
-        # ------------------------------------------------------ 2) Resume: skip stored tags
-        existing: set[str] = self.service.all_tag_names() if resume else set()
-        to_enrich = [name for name in tag_records if not (resume and name in existing)]
+        # ------------------------------------------------------ 2) Resume: only skip completed tags
+        if resume:
+            if hasattr(self.service, "enrichment_status_map"):
+                status_map = self.service.enrichment_status_map()
+            else:
+                status_map = {n: ("ok", "ok") for n in self.service.all_tag_names()}
+        else:
+            status_map = {}
+        to_enrich: list[tuple[str, bool, bool]] = []
+        for name in tag_records:
+            if not resume or name not in status_map:
+                to_enrich.append((name, not skip_wiki, True))
+                continue
+            w_status, a_status = status_map[name]
+            need_wiki = (not skip_wiki) and (w_status != "ok")
+            need_aliases = a_status != "ok"
+            if need_wiki or need_aliases:
+                if not need_wiki:
+                    tag_records[name]["wiki_status"] = w_status
+                if not need_aliases:
+                    tag_records[name]["aliases_status"] = a_status
+                to_enrich.append((name, need_wiki, need_aliases))
         resumed_count = len(tag_records) - len(to_enrich)
 
         # ------------------------------------------------------- 3) Enrich wiki + aliases
         wiki_fetched = 0
         wiki_missed = 0
         alias_fetched = 0
-        for idx, name in enumerate(to_enrich, start=1):
+        for idx, (name, need_wiki, need_aliases) in enumerate(to_enrich, start=1):
             rec = tag_records[name]
-            if not skip_wiki:
-                body = self._fetch_wiki_body(name, auth)
+            if need_wiki:
+                body, w_status = self._fetch_wiki_body(name, auth)
+                rec["wiki_status"] = w_status
                 if body:
                     rec["body_en"] = body
                     wiki_fetched += 1
                 else:
                     wiki_missed += 1
                 self._pause()
-            aliases = self._fetch_aliases(name, auth)
-            if aliases:
-                rec["aliases"] = aliases
-                alias_fetched += 1
-            self._pause()
+            if need_aliases:
+                aliases, a_status = self._fetch_aliases(name, auth)
+                rec["aliases_status"] = a_status
+                if aliases:
+                    rec["aliases"] = aliases
+                    alias_fetched += 1
+                self._pause()
 
             if idx % 50 == 0:
-                # Audit R7-H: persist progress in chunks so a crash (or a Ctrl-C)
-                # mid-import keeps everything already enriched. upsert_entries is
-                # idempotent, so the final upsert below stays correct.
-                # Audit R8-B: checkpoint ONLY the tags already enriched. Persisting
-                # the unprocessed tail here would make `resume` (which skips every
-                # stored tag) silently drop it forever, because the importer only
-                # re-enriches tags absent from the database.
-                self.service.upsert_entries([tag_records[n] for n in to_enrich[:idx]])
+                self.service.upsert_entries([tag_records[n] for n, _, _ in to_enrich[:idx]])
                 logger.info(
                     "Danbooru importer progress: %d/%d tags enriched (resumed %d, wiki ok %d, aliases %d).",
                     idx,
@@ -277,8 +303,8 @@ class TagDictionaryImporter:
         )
         return written
 
-    def _fetch_wiki_body(self, name: str, auth: tuple[str, str] | None) -> str:
-        """Fetches and cleans the wiki body for a single tag; returns '' on any failure/absence."""
+    def _fetch_wiki_body(self, name: str, auth: tuple[str, str] | None) -> tuple[str, str]:
+        """Fetches and cleans the wiki body for a single tag; returns `(body, 'ok'|'error')`."""
         try:
             raw_wikis = self._fetch_json(
                 f"{self.base_url}/wiki_pages.json",
@@ -287,16 +313,18 @@ class TagDictionaryImporter:
             )
         except Exception as err:  # noqa: BLE001 - a single tag failure must not abort the import
             logger.warning("Wiki fetch failed for '%s': %s", name, err)
-            return ""
-        if not isinstance(raw_wikis, list) or not raw_wikis:
-            return ""
+            return "", "error"
+        if not isinstance(raw_wikis, list):
+            return "", "error"
+        if not raw_wikis:
+            return "", "ok"
         wiki = raw_wikis[0]
         if not isinstance(wiki, dict):
-            return ""
-        return strip_dtext(str(wiki.get("body") or ""))
+            return "", "error"
+        return strip_dtext(str(wiki.get("body") or "")), "ok"
 
-    def _fetch_aliases(self, name: str, auth: tuple[str, str] | None) -> list[str]:
-        """Fetches active aliases that resolve to a tag; returns [] on any failure/absence."""
+    def _fetch_aliases(self, name: str, auth: tuple[str, str] | None) -> tuple[list[str], str]:
+        """Fetches active aliases that resolve to a tag; returns `(aliases, 'ok'|'error')`."""
         try:
             raw_aliases = self._fetch_json(
                 f"{self.base_url}/tag_aliases.json",
@@ -309,9 +337,9 @@ class TagDictionaryImporter:
             )
         except Exception as err:  # noqa: BLE001 - a single tag failure must not abort the import
             logger.warning("Alias fetch failed for '%s': %s", name, err)
-            return []
+            return [], "error"
         if not isinstance(raw_aliases, list):
-            return []
+            return [], "error"
         result: list[str] = []
         for al in raw_aliases:
             if not isinstance(al, dict):
@@ -321,7 +349,7 @@ class TagDictionaryImporter:
             # Defensive: only accept aliases that genuinely resolve to THIS tag.
             if ant and ant != name and cons == name and ant not in result:
                 result.append(ant)
-        return result
+        return result, "ok"
 
 
 def _estimate_minutes(requests: int, has_auth: bool) -> float:

@@ -137,12 +137,13 @@ class DiskImageCache:
         err_card = self._write_placeholder(post, f"{key}_err", color_hex="#ef4444")
         return str(err_card.resolve()), caption
 
-    def prune_if_needed(self) -> None:
+    def prune_if_needed(self, protected_paths: set[Path] | None = None) -> None:
         """Prunes oldest cached files if the directory exceeds max_files OR max_bytes.
 
         Audit R7-G: the byte bound is what actually protects the disk — the file
         count cap alone allows a theoretical ~300 GiB (600 × 512 MiB media cap).
         """
+        protected = {p.resolve() for p in protected_paths} if protected_paths else set()
         with self._lock:
             try:
                 files: list[Path] = []
@@ -163,6 +164,8 @@ class DiskImageCache:
                 for old_file in files:
                     if len(files) - removed <= self._max_files and total_bytes <= self._max_bytes:
                         break
+                    if old_file.resolve() in protected:
+                        continue
                     try:
                         size = old_file.stat().st_size
                     except OSError:
@@ -170,7 +173,7 @@ class DiskImageCache:
                     try:
                         old_file.unlink()
                     except OSError:
-                        pass
+                        continue
                     removed += 1
                     total_bytes = max(0, total_bytes - size)
             except OSError:
@@ -183,7 +186,10 @@ class DiskImageCache:
         self.prune_if_needed()
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
             futures = [pool.submit(self.resolve_post_image, p, quality) for p in posts]
-            return [f.result() for f in futures]
+            items = [f.result() for f in futures]
+        protected = {Path(path_str).resolve() for path_str, _ in items if path_str}
+        self.prune_if_needed(protected_paths=protected)
+        return items
 
 
 image_cache = DiskImageCache()

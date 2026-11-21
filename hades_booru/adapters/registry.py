@@ -264,12 +264,16 @@ class AdapterRegistry:
 
         raw_param = _first_param("tags") or _first_param("q") or _first_param("query")
         extracted_tags: str | None = None
-        if raw_param:
-            extracted_tags = unquote(raw_param).replace("+", " ").strip()
+        if raw_param is not None:
+            # parse_qs() already URL-decodes query values once (turning '+' into space
+            # and '%2B' into '+'); never call unquote() or .replace('+', ' ') again (HB-11).
+            cleaned = raw_param.strip()
+            if cleaned:
+                extracted_tags = cleaned
         else:
             path_tag_m = re.search(r"/(?:timelines/)?tag(?:s)?/([^/?#]+)", parsed.path, re.IGNORECASE)
             if path_tag_m:
-                extracted_tags = unquote(path_tag_m.group(1)).replace("+", " ").strip()
+                extracted_tags = unquote(path_tag_m.group(1)).strip()
 
         for adapter in self._adapters.values():
             if adapter.can_handle_url(trimmed):
@@ -288,15 +292,22 @@ class AdapterRegistry:
                         extracted_tags=zc_tags,
                     )
 
+                is_philomena_direct = (
+                    adapter.id in {"derpibooru", "furbooru", "twibooru", "ponybooru"}
+                    or adapter.__class__.__name__.startswith("Philomena")
+                ) and bool(re.fullmatch(r"/(?:images/)?\d+(?:/.*)?", parsed.path, re.IGNORECASE))
+
                 is_direct = bool(
-                    re.search(r"/posts?/\d+", trimmed, re.IGNORECASE)
+                    is_philomena_direct
+                    or re.search(r"/posts?/\d+", trimmed, re.IGNORECASE)
                     or re.search(r"/images/\d+", trimmed, re.IGNORECASE)
                     or (
                         re.search(r"[?&]id=\d+", trimmed, re.IGNORECASE)
                         and not re.search(r"[?&]s=list", trimmed, re.IGNORECASE)
                     )
                     or re.search(r"/post/show/\d+", trimmed, re.IGNORECASE)
-                    or re.search(r"/artwork/[a-zA-Z0-9_-]+", trimmed, re.IGNORECASE)
+                    or re.search(r"/artworks?/[a-zA-Z0-9_-]+", trimmed, re.IGNORECASE)
+                    or re.search(r"/art/[a-zA-Z0-9_-]+", trimmed, re.IGNORECASE)
                     or re.search(r"/statuses/\d+", trimmed, re.IGNORECASE)
                     or re.search(r"/g/\d+/[a-z0-9]+", trimmed, re.IGNORECASE)
                 )
